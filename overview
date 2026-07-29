@@ -1,0 +1,322 @@
+{
+  "project": {
+    "name": "Jarvis Desktop AI Assistant",
+    "codename": "JARVIS",
+    "version": "1.0",
+    "status": "Planning",
+    "language": "Python",
+    "platforms": [
+      "Windows",
+      "macOS"
+    ],
+    "architecture": "Hybrid Offline + Online AI Agent",
+    "type": "Cross-Platform Intelligent Desktop Personal Assistant"
+  },
+
+  "vision": {
+    "summary": "The goal of this project is to create a fully offline-capable desktop AI assistant that behaves like a real personal assistant instead of a simple chatbot. The assistant should understand voice and text commands, control the operating system, automate repetitive tasks, maintain memory, search the internet when necessary, interact naturally with the user, and intelligently decide which AI model or service should be used depending on the situation."
+  },
+
+  "primary_objectives": [
+    "Act as a real desktop personal assistant.",
+    "Support both voice and text conversations.",
+    "Operate completely offline for local tasks.",
+    "Automatically switch to online services when internet access is available.",
+    "Perform desktop automation without requiring continuous user interaction.",
+    "Understand goals instead of only predefined commands.",
+    "Be modular and expandable through plugins."
+  ],
+
+  "core_principles": {
+    "offline_first": true,
+    "privacy_first": true,
+    "cross_platform": true,
+    "modular_architecture": true,
+    "plugin_based": true,
+    "ai_independent": true,
+    "voice_first": true,
+    "human_like_interaction": true
+  },
+
+  "interaction_methods": {
+    "voice": {
+      "enabled": true,
+      "wake_word": true,
+      "push_to_talk": true,
+      "continuous_conversation": true
+    },
+    "text_chat": true,
+    "gui": true,
+    "keyboard_shortcuts": true
+  },
+
+  "activation": {
+    "methods": [
+      "Wake Word",
+      "Push To Talk Button",
+      "Keyboard Shortcut",
+      "GUI Button"
+    ]
+  },
+
+  "conversation": {
+    "voice_to_voice": true,
+    "text_to_text": true,
+    "voice_to_text": true,
+    "context_memory": true,
+    "conversation_history": true,
+    "natural_dialogue": true
+  },
+
+  "offline_capabilities": {
+    "application_control": [
+      "Open Applications",
+      "Close Applications",
+      "Switch Applications",
+      "Launch Installed Software"
+    ],
+
+    "system_control": [
+      "Shutdown",
+      "Restart",
+      "Sleep",
+      "Lock Screen",
+      "Volume Control",
+      "Brightness Control",
+      "Wallpaper Change",
+      "Dark Mode",
+      "Light Mode",
+      "WiFi Control",
+      "Bluetooth Control (where supported)"
+    ],
+
+    "file_management": [
+      "Create File",
+      "Rename File",
+      "Move File",
+      "Copy File",
+      "Delete File",
+      "Recover File",
+      "Search Files",
+      "Compress Files",
+      "Extract Archives"
+    ],
+
+    "clipboard": [
+      "Copy",
+      "Paste",
+      "Clipboard History"
+    ],
+
+    "screenshots": [
+      "Capture Screenshot",
+      "Delayed Screenshot",
+      "Capture Active Window"
+    ],
+
+    "screen_recording": [
+      "Start Recording",
+      "Stop Recording",
+      "Timed Recording"
+    ],
+
+    "note_management": [
+      "Create Notes",
+      "Voice Dictation",
+      "Append Notes",
+      "Modify Notes",
+      "Open Notes",
+      "Save Notes"
+    ],
+
+    "document_support": [
+      "TXT",
+      "DOCX",
+      "PDF (future)"
+    ],
+
+    "scheduler": [
+      "Reminder",
+      "Alarm",
+      "Countdown Timer",
+      "Task Scheduling"
+    ]
+  },
+
+  "security": {
+    "authentication_required_for_sensitive_actions": true,
+
+    "supported_methods": [
+      "Password",
+      "Operating System Authentication",
+      "Face Authentication (Future)"
+    ],
+
+    "protected_actions": [
+      "Delete Important Files",
+      "System Settings",
+      "Factory Level Changes",
+      "Administrative Operations"
+    ]
+  },
+
+  "memory": {
+    "conversation_memory": true,
+    "user_preferences": true,
+    "recent_actions": true,
+    "local_database": true,
+    "long_term_memory": true
+  },
+
+  "internet_capabilities": {
+    "automatic_web_search": true,
+    "search_when_local_ai_is_uncertain": true,
+
+    "tasks": [
+      "Search Information",
+      "Latest News",
+      "Image Search",
+      "Download Public Images",
+      "Website Navigation",
+      "Research",
+      "Fact Verification",
+      "Document Search"
+    ],
+
+    "browser_automation": true,
+
+    "website_specific_tasks": [
+      "Google",
+      "Wikipedia",
+      "GitHub",
+      "Stack Overflow",
+      "iStock (only if user has access and licensing permits)",
+      "User Specified Websites"
+    ]
+  },
+
+  "ai_system": {
+    "architecture": "Hybrid",
+
+    "offline_ai": {
+      "enabled": true,
+      "examples": [
+        "Ollama",
+        "Local LLM"
+      ]
+    },
+
+    "online_ai": {
+      "enabled": true,
+      "examples": [
+        "Gemini",
+        "OpenAI",
+        "Claude"
+      ]
+    },
+
+    "routing": {
+      "automatic_selection": true,
+      "fallback_logic": true,
+      "confidence_based_switching": true
+    }
+  },
+
+  "decision_engine": {
+    "goal_based_execution": true,
+    "intent_detection": true,
+    "task_planning": true,
+    "multi_step_reasoning": true
+  },
+
+  "automation_engine": {
+    "desktop_control": true,
+    "keyboard_control": true,
+    "mouse_control": true,
+    "window_management": true,
+    "process_management": true
+  },
+
+  "plugin_system": {
+    "enabled": true,
+    "hot_load": true,
+    "future_extensions": true
+  },
+
+  "future_features": [
+    "Face Recognition",
+    "Object Detection",
+    "OCR",
+    "Email Assistant",
+    "Calendar Integration",
+    "Smart Home Integration",
+    "Local Vision Model",
+    "Multi-Agent Collaboration",
+    "Workflow Automation",
+    "Cloud Synchronization"
+  ],
+
+  "non_goals": [
+    "Malware Development",
+    "Unauthorized System Access",
+    "Bypassing Security Mechanisms",
+    "Illegal Automation",
+    "Copyright Protected Content Download Without Permission"
+  ],
+
+  "design_goals": {
+    "fast": true,
+    "lightweight": true,
+    "responsive": true,
+    "offline_friendly": true,
+    "privacy_focused": true,
+    "professional_ui": true,
+    "maintainable": true,
+    "scalable": true
+  },
+
+  "example_workflows": [
+    {
+      "command": "Jarvis, open Visual Studio Code.",
+      "steps": [
+        "Recognize voice",
+        "Detect intent",
+        "Identify application",
+        "Launch application",
+        "Confirm completion"
+      ]
+    },
+    {
+      "command": "Jarvis, take a note.",
+      "steps": [
+        "Ask for note content",
+        "Transcribe speech",
+        "Create note",
+        "Save locally",
+        "Open editor if requested"
+      ]
+    },
+    {
+      "command": "Jarvis, search the latest AI news.",
+      "steps": [
+        "Detect internet connection",
+        "Perform web search",
+        "Collect reliable sources",
+        "Summarize results",
+        "Present response"
+      ]
+    },
+    {
+      "command": "Jarvis, download a free rose image from the web.",
+      "steps": [
+        "Search images",
+        "Select suitable public result",
+        "Download",
+        "Save to Downloads",
+        "Notify user"
+      ]
+    }
+  ],
+
+  "project_goal": "Create a professional cross-platform desktop AI assistant that combines offline intelligence, online knowledge, natural conversation, desktop automation, and extensibility into a single modular application."
+}
