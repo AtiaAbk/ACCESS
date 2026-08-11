@@ -1,38 +1,48 @@
+from core.router import IntentRouter
 from tools.system_tools import SystemTools
 
 
 class AccessEngine:
     """
-    Core engine of ACCESS.
+    Core execution engine of ACCESS.
 
-    Responsible for receiving user input,
-    understanding basic commands,
-    and executing appropriate tools.
+    Receives user input, detects intent through the router,
+    and executes the appropriate system tool.
     """
 
     def __init__(self):
         self.running = True
+        self.router = IntentRouter()
         self.system_tools = SystemTools()
 
     def process(self, user_input: str) -> str:
         """Process a user command."""
 
-        command = user_input.strip()
+        intent = self.router.route(user_input)
 
-        if not command:
+        # Empty input
+        if intent.name == "empty":
             return "I didn't receive any command."
 
-        command_lower = command.lower()
+        # Exit
+        if intent.name == "exit":
+            self.stop()
+            return "Session terminated safely."
 
         # Open application
-        if command_lower.startswith("open "):
-            application_name = command[5:].strip()
-
+        if intent.name == "open_application":
             return self.system_tools.open_application(
-                application_name
+                intent.target
             )
 
-        return f"You said: {command}"
+        # Unknown command
+        if intent.name == "unknown":
+            return (
+                f"I don't know how to handle: "
+                f"{intent.target}"
+            )
+
+        return "I couldn't determine what to do."
 
     def stop(self):
         """Stop ACCESS."""
