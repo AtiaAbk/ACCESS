@@ -1,2 +1,2 @@
 # ACCESS
-Voice assistent for  smart home control
+Adaptive Cognitive Companion for Efficient System Services
