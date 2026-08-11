@@ -6,6 +6,8 @@ from config.settings import (
     DEBUG,
 )
 
+from core.engine import AccessEngine
+
 
 def main():
     print("=" * 60)
@@ -18,6 +20,25 @@ def main():
 
     print("ACCESS is starting...")
     print("System initialization complete.")
+    print()
+
+    engine = AccessEngine()
+
+    print("Type 'exit' to close ACCESS.")
+    print()
+
+    while engine.running:
+
+        user_input = input("You: ")
+
+        if user_input.lower().strip() == "exit":
+            engine.stop()
+            print("ACCESS: Goodbye.")
+            break
+
+        response = engine.process(user_input)
+
+        print(f"ACCESS: {response}")
 
 
 if __name__ == "__main__":
