@@ -8,13 +8,8 @@ class SystemTools:
     def __init__(self):
         self.system = platform.system()
 
-    def open_application(self, application_name: str) -> str:
-        """Open an installed desktop application."""
-
-        application_name = application_name.strip()
-
-        if not application_name:
-            return "Please specify an application."
+    def _get_application_name(self, application_name: str) -> tuple[str, str]:
+        """Resolve common application aliases."""
 
         aliases = {
             "chrome": "Google Chrome",
@@ -29,21 +24,33 @@ class SystemTools:
             "finder": "Finder",
         }
 
-        requested_name = application_name
+        requested_name = application_name.strip()
 
-        application_name = aliases.get(
-            application_name.lower(),
-            application_name
+        resolved_name = aliases.get(
+            requested_name.lower(),
+            requested_name,
+        )
+
+        return requested_name, resolved_name
+
+    def open_application(self, application_name: str) -> str:
+        """Open an installed desktop application."""
+
+        application_name = application_name.strip()
+
+        if not application_name:
+            return "Please specify an application."
+
+        requested_name, resolved_name = (
+            self._get_application_name(application_name)
         )
 
         try:
-
             if self.system == "Darwin":
-
                 result = subprocess.run(
-                    ["open", "-a", application_name],
+                    ["open", "-a", resolved_name],
                     capture_output=True,
-                    text=True
+                    text=True,
                 )
 
                 if result.returncode != 0:
@@ -53,14 +60,13 @@ class SystemTools:
                     )
 
             elif self.system == "Windows":
-
                 subprocess.Popen(
                     [
                         "cmd",
                         "/c",
                         "start",
                         "",
-                        application_name
+                        resolved_name,
                     ]
                 )
 
@@ -70,11 +76,86 @@ class SystemTools:
                     "not supported yet."
                 )
 
-            return f"Opening {application_name}."
+            return f"Opening {resolved_name}."
 
         except Exception as error:
-
             return (
                 f"I couldn't open {requested_name}. "
+                f"Error: {error}"
+            )
+
+    def close_application(self, application_name: str) -> str:
+        """Close a running desktop application."""
+
+        application_name = application_name.strip()
+
+        if not application_name:
+            return "Please specify an application."
+
+        requested_name, resolved_name = (
+            self._get_application_name(application_name)
+        )
+
+        try:
+            if self.system == "Darwin":
+                script = (
+                    f'tell application "{resolved_name}" '
+                    f"to quit"
+                )
+
+                result = subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True,
+                    text=True,
+                )
+
+                if result.returncode != 0:
+                    return (
+                        f"I couldn't close "
+                        f"'{requested_name}'."
+                    )
+
+            elif self.system == "Windows":
+                executable_names = {
+                    "Google Chrome": "chrome.exe",
+                    "Calculator": "CalculatorApp.exe",
+                    "Visual Studio Code": "Code.exe",
+                    "Terminal": "WindowsTerminal.exe",
+                    "Safari": "Safari.exe",
+                }
+
+                executable = executable_names.get(
+                    resolved_name,
+                    f"{resolved_name}.exe",
+                )
+
+                result = subprocess.run(
+                    [
+                        "taskkill",
+                        "/IM",
+                        executable,
+                        "/F",
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+
+                if result.returncode != 0:
+                    return (
+                        f"I couldn't close "
+                        f"'{requested_name}'."
+                    )
+
+            else:
+                return (
+                    "This operating system is "
+                    "not supported yet."
+                )
+
+            return f"Closing {resolved_name}."
+
+        except Exception as error:
+            return (
+                f"I couldn't close {requested_name}. "
                 f"Error: {error}"
             )

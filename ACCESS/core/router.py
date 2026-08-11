@@ -69,6 +69,32 @@ class IntentRouter:
             r"^open\s+(.+)$",
             r"^launch\s+(.+)$",
             r"^start\s+(.+)$",
+            close_patterns = [
+    r"^close\s+(.+)$",
+    r"^quit\s+(.+)$",
+    r"^stop\s+(.+)$",
+]
+
+for pattern in close_patterns:
+    match = re.match(
+        pattern,
+        command,
+        re.IGNORECASE,
+    )
+
+    if match:
+        target = match.group(1).strip()
+
+        target = self.APPLICATION_ALIASES.get(
+            target.lower(),
+            target,
+        )
+
+        return Intent(
+            name="close_application",
+            target=target,
+            confidence=0.95,
+        )
         ]
 
         for pattern in open_patterns:
@@ -98,22 +124,3 @@ class IntentRouter:
             confidence=0.0,
         )
 
-if __name__ == "__main__":
-    router = IntentRouter()
-
-    test_commands = [
-        "open chrome",
-        "launch calculator",
-        "start vscode",
-        "exit",
-        "hello ACCESS",
-    ]
-
-    for command in test_commands:
-        intent = router.route(command)
-
-        print(f"Input: {command}")
-        print(f"Intent: {intent.name}")
-        print(f"Target: {intent.target}")
-        print(f"Confidence: {intent.confidence}")
-        print("-" * 50)
