@@ -1,7 +1,7 @@
 {
   "project": {
-    "name": "Jarvis Desktop AI Assistant",
-    "codename": "JARVIS",
+    "name": "ACCESS : Adaptive Cognitive Companion for Efficient System Services",
+    "codename": "ACCESS",
     "version": "1.0",
     "status": "Planning",
     "language": "Python",
