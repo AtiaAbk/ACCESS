@@ -1,5 +1,6 @@
-import platform
+import os
 
+from dotenv import load_dotenv
 from rich.align import Align
 from rich.console import Console
 from rich.panel import Panel
@@ -9,18 +10,29 @@ from rich.text import Text
 from core.engine import AccessEngine
 
 
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+load_dotenv()
+
 APP_NAME = "ACCESS"
 APP_FULL_NAME = (
     "Adaptive Cognitive Companion for Efficient System Services"
 )
+
 VERSION = "1.0"
 MODE = "OFFLINE-FIRST"
 
 console = Console()
 
 
+# ============================================================
+# BANNER
+# ============================================================
+
 def show_banner():
-    """Display the main ACCESS terminal banner."""
+    """Display the main ACCESS banner."""
 
     banner = Text()
 
@@ -50,16 +62,21 @@ def show_banner():
     )
 
     subtitle = Text()
+
     subtitle.append(
         "\n\nAdaptive Cognitive Companion for Efficient System Services",
         style="bold white",
     )
+
     subtitle.append(
         "\n\nIntelligent Desktop Assistant",
         style="dim",
     )
 
-    content = Text.assemble(banner, subtitle)
+    content = Text.assemble(
+        banner,
+        subtitle
+    )
 
     console.print(
         Panel(
@@ -70,7 +87,11 @@ def show_banner():
     )
 
 
-def show_system_status():
+# ============================================================
+# SYSTEM STATUS
+# ============================================================
+
+def show_system_status(engine):
     """Display ACCESS system status."""
 
     table = Table(
@@ -90,13 +111,18 @@ def show_system_status():
     )
 
     table.add_row(
+        "[bold cyan]ROUTER[/bold cyan]",
+        "[green]● READY[/green]",
+    )
+
+    table.add_row(
         "[bold cyan]MODE[/bold cyan]",
         f"[yellow]{MODE}[/yellow]",
     )
 
     table.add_row(
         "[bold cyan]PLATFORM[/bold cyan]",
-        platform.system(),
+        os.uname().sysname,
     )
 
     table.add_row(
@@ -113,44 +139,57 @@ def show_system_status():
     )
 
 
+# ============================================================
+# HELP
+# ============================================================
+
 def show_help():
-    """Display available terminal commands."""
+    """Display available commands."""
 
     table = Table(
         title="ACCESS Commands",
         border_style="cyan",
     )
 
-    table.add_column("Command", style="bold cyan")
-    table.add_column("Description")
-
-    table.add_row(
-        "help",
-        "Show available commands",
+    table.add_column(
+        "Command",
+        style="bold cyan"
     )
 
-    table.add_row(
-        "status",
-        "Show ACCESS system status",
+    table.add_column(
+        "Description"
     )
 
-    table.add_row(
-        "about",
-        "Show project information",
-    )
+    commands = [
+        ("help", "Show available commands"),
+        ("status", "Show ACCESS system status"),
+        ("about", "Show project information"),
+        ("clear", "Clear the terminal"),
+        ("exit", "Close ACCESS"),
+        ("open chrome", "Open an application"),
+        ("close chrome", "Close an application"),
+        ("screenshot", "Capture the screen"),
+        ("create file NAME", "Create a file"),
+        ("read file PATH", "Read a file"),
+        ("search file NAME", "Search for a file"),
+        ("copy file A to B", "Copy a file"),
+        ("move file A to B", "Move a file"),
+        ("rename file A to B", "Rename a file"),
+        ("delete file PATH", "Delete a file"),
+    ]
 
-    table.add_row(
-        "clear",
-        "Clear the terminal",
-    )
-
-    table.add_row(
-        "exit",
-        "Close ACCESS",
-    )
+    for command, description in commands:
+        table.add_row(
+            command,
+            description
+        )
 
     console.print(table)
 
+
+# ============================================================
+# ABOUT
+# ============================================================
 
 def show_about():
     """Display project information."""
@@ -186,8 +225,12 @@ def show_about():
     )
 
 
+# ============================================================
+# MAIN APPLICATION
+# ============================================================
+
 def start_access():
-    """Start the ACCESS terminal interface."""
+    """Start ACCESS."""
 
     engine = AccessEngine()
 
@@ -197,7 +240,7 @@ def start_access():
 
     console.print()
 
-    show_system_status()
+    show_system_status(engine)
 
     console.print()
 
@@ -211,14 +254,16 @@ def start_access():
 
         try:
             command = console.input(
-                "[bold cyan]ACCESS[/bold cyan] [white]>[/white] "
+                "[bold cyan]ACCESS[/bold cyan] "
+                "[white]>[/white] "
             ).strip()
 
         except (KeyboardInterrupt, EOFError):
+
             console.print(
                 "\n[yellow]ACCESS shutting down...[/yellow]"
             )
-            engine.stop()
+
             break
 
         if not command:
@@ -226,34 +271,36 @@ def start_access():
 
         command_lower = command.lower()
 
-        if command_lower == "exit":
-            engine.stop()
-
-            console.print(
-                "\n[cyan]ACCESS:[/cyan] "
-                "[green]Session terminated safely.[/green]"
-            )
-
-        elif command_lower == "help":
+        # UI-only commands
+        if command_lower == "help":
             show_help()
+            continue
 
-        elif command_lower == "status":
-            show_system_status()
+        if command_lower == "status":
+            show_system_status(engine)
+            continue
 
-        elif command_lower == "about":
+        if command_lower == "about":
             show_about()
+            continue
 
-        elif command_lower == "clear":
+        if command_lower == "clear":
             console.clear()
             show_banner()
+            console.print()
+            continue
 
-        else:
-            response = engine.process(command)
+        # Everything else goes to the engine
+        response = engine.process(command)
 
-            console.print(
-                f"[cyan]ACCESS:[/cyan] {response}"
-            )
+        console.print(
+            f"[cyan]ACCESS:[/cyan] {response}"
+        )
 
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 def main():
     """Application entry point."""

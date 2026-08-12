@@ -1,0 +1,177 @@
+from core.router import IntentRouter
+from tools.system_tools import SystemControl
+from tools.screenshot_tools import ScreenshotTools
+from tools.file_tools import FileTools
+
+
+class AccessEngine:
+    """
+    Core execution engine of ACCESS.
+
+    Responsible for:
+    - Receiving user commands
+    - Routing commands through IntentRouter
+    - Executing the appropriate tool
+    - Returning a human-readable response
+    """
+
+    def __init__(self):
+        self.running = True
+
+        self.router = IntentRouter()
+        self.system_tools = SystemControl()
+        self.screenshot_tools = ScreenshotTools()
+        self.file_tools = FileTools()
+
+    def process(self, user_input: str) -> str:
+        """Process and execute a user command."""
+
+        command = user_input.strip()
+
+        if not command:
+            return "I didn't receive any command."
+
+        # --------------------------------------------------
+        # ROUTE COMMAND
+        # --------------------------------------------------
+
+        result = self.router.route(command)
+
+        intent = result.name
+        target = result.target
+
+        # --------------------------------------------------
+        # EXIT
+        # --------------------------------------------------
+
+        if intent == "exit":
+            self.stop()
+            return "Session terminated safely."
+
+        # --------------------------------------------------
+        # OPEN APPLICATION
+        # --------------------------------------------------
+
+        if intent == "open_application":
+            return self.system_tools.open_application(target)
+
+        # --------------------------------------------------
+        # CLOSE APPLICATION
+        # --------------------------------------------------
+
+        if intent == "close_application":
+            return self.system_tools.close_application(target)
+
+        # --------------------------------------------------
+        # SCREENSHOT
+        # --------------------------------------------------
+
+        if intent == "screenshot":
+            return self.screenshot_tools.capture_screen()
+
+        # --------------------------------------------------
+        # CREATE FILE
+        # --------------------------------------------------
+
+        if intent == "create_file":
+            return self.file_tools.create_file(target)
+
+        # --------------------------------------------------
+        # READ FILE
+        # --------------------------------------------------
+
+        if intent == "read_file":
+            return self.file_tools.read_file(target)
+
+        # --------------------------------------------------
+        # DELETE FILE
+        # --------------------------------------------------
+
+        if intent == "delete_file":
+            return self.file_tools.delete_file(target)
+
+        # --------------------------------------------------
+        # SEARCH FILE
+        # --------------------------------------------------
+
+        if intent == "search_file":
+            return self.file_tools.search_file(
+                "data",
+                target
+            )
+
+        # --------------------------------------------------
+        # COPY FILE
+        # --------------------------------------------------
+
+        if intent == "copy_file":
+
+            if " to " not in target.lower():
+                return (
+                    "Use: copy file SOURCE to DESTINATION"
+                )
+
+            source, destination = target.split(
+                " to ",
+                1
+            )
+
+            return self.file_tools.copy_file(
+                source.strip(),
+                destination.strip()
+            )
+
+        # --------------------------------------------------
+        # MOVE FILE
+        # --------------------------------------------------
+
+        if intent == "move_file":
+
+            if " to " not in target.lower():
+                return (
+                    "Use: move file SOURCE to DESTINATION"
+                )
+
+            source, destination = target.split(
+                " to ",
+                1
+            )
+
+            return self.file_tools.move_file(
+                source.strip(),
+                destination.strip()
+            )
+
+        # --------------------------------------------------
+        # RENAME FILE
+        # --------------------------------------------------
+
+        if intent == "rename_file":
+
+            if " to " not in target.lower():
+                return (
+                    "Use: rename file SOURCE to NEW_NAME"
+                )
+
+            source, new_name = target.split(
+                " to ",
+                1
+            )
+
+            return self.file_tools.rename_file(
+                source.strip(),
+                new_name.strip()
+            )
+
+        # --------------------------------------------------
+        # UNKNOWN COMMAND
+        # --------------------------------------------------
+
+        return (
+            f"I don't know how to handle: {command}"
+        )
+
+    def stop(self):
+        """Stop ACCESS."""
+
+        self.running = False

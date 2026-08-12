@@ -1,234 +1,381 @@
+"""
+ACCESS Core Engine
 
+Central execution engine for ACCESS.
+Handles intent routing, system tools, file tools,
+and confirmation for destructive system actions.
+"""
+
+from core.router import IntentRouter
 from tools.system_tools import SystemControl
-from tools.screenshot_tools import ScreenshotTools
-from tools.file_tools import FileTools
 
 
 class AccessEngine:
-    """
-    Core execution engine of ACCESS.
-
-    Responsible for receiving user commands
-    and dispatching them to the appropriate tools.
-    """
+    """Central engine for ACCESS command processing."""
 
     def __init__(self):
+        self.router = IntentRouter()
+        self.system = SystemControl()
+
         self.running = True
 
-        self.system_tools = SystemControl()
-        self.screenshot_tools = ScreenshotTools()
-        self.file_tools = FileTools()
+        # Pending dangerous/destructive action.
+        # Example: "shutdown"
+        self.pending_action = None
+
+        # Actions that require explicit confirmation.
+        self.confirmation_actions = {
+            "shutdown",
+            "restart",
+            "sleep",
+        }
+
+    # =====================================================
+    # MAIN PROCESSOR
+    # =====================================================
 
     def process(self, user_input: str) -> str:
-        """Process and execute a user command."""
+        """Process a user command and return a response."""
 
         command = user_input.strip()
 
         if not command:
-            return "I didn't receive any command."
+            return "Please enter a command."
 
-        command_lower = command.lower()
+        # -------------------------------------------------
+        # Handle pending confirmation first
+        # -------------------------------------------------
 
-        # =====================================================
+        if self.pending_action is not None:
+            return self._handle_confirmation(command)
+
+        # -------------------------------------------------
+        # Route normal command
+        # -------------------------------------------------
+
+        intent = self.router.route(command)
+
+        # -------------------------------------------------
         # EXIT
-        # =====================================================
+        # -------------------------------------------------
 
-        if command_lower in {
-            "exit",
-            "quit",
-            "close access",
-        }:
-            self.stop()
+        if intent.name == "exit":
+            self.running = False
             return "Session terminated safely."
 
-        # =====================================================
+        # -------------------------------------------------
+        # SYSTEM CONTROL
+        # -------------------------------------------------
+
+        if intent.name == "shutdown":
+            return self._request_confirmation("shutdown")
+
+        if intent.name == "restart":
+            return self._request_confirmation("restart")
+
+        if intent.name == "sleep":
+            return self._request_confirmation("sleep")
+
+        if intent.name == "lock_screen":
+            return self.system.lock_screen()
+
+        if intent.name == "volume_up":
+            return self.system.volume_up()
+
+        if intent.name == "volume_down":
+            return self.system.volume_down()
+
+        if intent.name == "mute":
+            return self.system.mute()
+
+        if intent.name == "brightness_up":
+            return self.system.brightness_up()
+
+        if intent.name == "brightness_down":
+            return self.system.brightness_down()
+
+        # -------------------------------------------------
+        # APPLICATION CONTROL
+        # -------------------------------------------------
+
+        if intent.name == "open_application":
+            return self.system.open_application(
+                intent.target
+            )
+
+        if intent.name == "close_application":
+            return self.system.close_application(
+                intent.target
+            )
+
+        # -------------------------------------------------
         # SCREENSHOT
-        # =====================================================
+        # -------------------------------------------------
 
-        if command_lower in {
-            "take screenshot",
-            "capture screenshot",
-            "screenshot",
-            "take a screenshot",
+        if intent.name == "screenshot":
+            return self._handle_screenshot()
+
+        # -------------------------------------------------
+        # FILE OPERATIONS
+        # -------------------------------------------------
+
+        if intent.name == "create_file":
+            return self._handle_file_operation(
+                "create",
+                intent.target,
+            )
+
+        if intent.name == "read_file":
+            return self._handle_file_operation(
+                "read",
+                intent.target,
+            )
+
+        if intent.name == "delete_file":
+            return self._handle_file_operation(
+                "delete",
+                intent.target,
+            )
+
+        if intent.name == "search_file":
+            return self._handle_file_operation(
+                "search",
+                intent.target,
+            )
+
+        if intent.name == "copy_file":
+            return self._handle_file_operation(
+                "copy",
+                intent.target,
+            )
+
+        if intent.name == "move_file":
+            return self._handle_file_operation(
+                "move",
+                intent.target,
+            )
+
+        if intent.name == "rename_file":
+            return self._handle_file_operation(
+                "rename",
+                intent.target,
+            )
+
+        # -------------------------------------------------
+        # UNKNOWN
+        # -------------------------------------------------
+
+        return (
+            f"I don't know how to handle: {command}"
+        )
+
+    # =====================================================
+    # CONFIRMATION
+    # =====================================================
+
+    def _request_confirmation(self, action: str) -> str:
+        """
+        Put a destructive system action into a pending
+        confirmation state.
+        """
+
+        self.pending_action = action
+
+        if action == "shutdown":
+            return (
+                "Shutdown requested.\n"
+                "ACCESS will NOT shut down the computer yet.\n"
+                "Please save your work first.\n"
+                "Type 'yes', 'sure', or 'ok' to confirm.\n"
+                "Type 'cancel' to abort."
+            )
+
+        if action == "restart":
+            return (
+                "Restart requested.\n"
+                "ACCESS will NOT restart the computer yet.\n"
+                "Please save your work first.\n"
+                "Type 'yes', 'sure', or 'ok' to confirm.\n"
+                "Type 'cancel' to abort."
+            )
+
+        if action == "sleep":
+            return (
+                "Sleep requested.\n"
+                "Type 'yes', 'sure', or 'ok' to confirm.\n"
+                "Type 'cancel' to abort."
+            )
+
+        self.pending_action = None
+
+        return "This action requires confirmation."
+
+    def _handle_confirmation(self, command: str) -> str:
+        """Handle confirmation or cancellation."""
+
+        answer = command.strip().lower()
+
+        # -------------------------------------------------
+        # CANCEL
+        # -------------------------------------------------
+
+        if answer in {
+            "cancel",
+            "no",
+            "n",
+            "abort",
+            "stop",
         }:
-            return self.screenshot_tools.capture_screen()
+            action = self.pending_action
 
-        # =====================================================
-        # OPEN APPLICATION
-        # =====================================================
+            self.pending_action = None
 
-        if command_lower.startswith("open "):
-            application_name = command[5:].strip()
-
-            if not application_name:
-                return "Please specify an application."
-
-            return self.system_tools.open_application(
-                application_name
-            )
-                # =====================================================
-        # CLOSE APPLICATION
-        # =====================================================
-
-        if command_lower.startswith("close "):
-
-            application_name = command[6:].strip()
-
-            if not application_name:
-                return "Please specify an application."
-
-            return self.system_tools.close_application(
-                application_name
-            )
-        # =====================================================
-        # CREATE FILE
-        # =====================================================
-
-        if command_lower.startswith("create file "):
-
-            file_path = command[12:].strip()
-
-            if not file_path:
-                return "Please specify a file name."
-
-            return self.file_tools.create_file(
-                file_path
+            return (
+                f"{action.capitalize()} cancelled. "
+                "No system action was performed."
             )
 
-        # =====================================================
-        # SEARCH FILE
-        # =====================================================
+        # -------------------------------------------------
+        # CONFIRM
+        # -------------------------------------------------
 
-        if command_lower.startswith("search file "):
+        if answer in {
+            "yes",
+            "y",
+            "sure",
+            "ok",
+            "okay",
+            "confirm",
+            "confirmed",
+        }:
+            action = self.pending_action
 
-            filename = command[12:].strip()
+            # Clear pending state BEFORE execution.
+            self.pending_action = None
 
-            if not filename:
-                return "Please specify a file name."
-
-            return self.file_tools.search_file(
-                "data",
-                filename
+            return self._execute_confirmed_action(
+                action
             )
 
-        # =====================================================
-        # COPY FILE
-        # Format:
-        # copy file SOURCE to DESTINATION
-        # =====================================================
+        # -------------------------------------------------
+        # INVALID RESPONSE
+        # -------------------------------------------------
 
-        if command_lower.startswith("copy file "):
+        return (
+            "Confirmation required.\n"
+            "Type 'yes', 'sure', or 'ok' to continue.\n"
+            "Type 'cancel' to abort."
+        )
 
-            instruction = command[10:].strip()
+    def _execute_confirmed_action(
+        self,
+        action: str,
+    ) -> str:
+        """Execute an already-confirmed system action."""
 
-            parts = instruction.lower().split(" to ", 1)
+        if action == "shutdown":
+            return self.system.execute_shutdown()
 
-            if len(parts) != 2:
-                return (
-                    "Use: copy file SOURCE to DESTINATION"
+        if action == "restart":
+            return self.system.execute_restart()
+
+        if action == "sleep":
+            return self.system.execute_sleep()
+
+        return (
+            f"Unknown confirmed action: {action}"
+        )
+
+    # =====================================================
+    # SCREENSHOT
+    # =====================================================
+
+    def _handle_screenshot(self) -> str:
+        """Handle screenshot request."""
+
+        try:
+            from tools.screenshot_tools import (
+                ScreenshotTool,
+            )
+
+            tool = ScreenshotTool()
+
+            return tool.take_screenshot()
+
+        except Exception as error:
+            return (
+                f"Screenshot tool unavailable: {error}"
+            )
+
+    # =====================================================
+    # FILE OPERATIONS
+    # =====================================================
+
+    def _handle_file_operation(
+        self,
+        operation: str,
+        target: str,
+    ) -> str:
+        """
+        Handle file operations through file_tools.
+        """
+
+        try:
+            from tools.file_tools import FileTools
+
+            tool = FileTools()
+
+            if operation == "create":
+                return tool.create_file(target)
+
+            if operation == "read":
+                return tool.read_file(target)
+
+            if operation == "delete":
+                return tool.delete_file(target)
+
+            if operation == "search":
+                return tool.search_file(target)
+
+            if operation == "copy":
+                source, destination = target.split(
+                    "|",
+                    1,
                 )
 
-            source_part, destination_part = parts
-
-            source = instruction[
-                :len(source_part)
-            ].strip()
-
-            destination = instruction[
-                len(source_part) + 4:
-            ].strip()
-
-            if not source or not destination:
-                return (
-                    "Use: copy file SOURCE to DESTINATION"
+                return tool.copy_file(
+                    source,
+                    destination,
                 )
 
-            return self.file_tools.copy_file(
-                source,
-                destination
+            if operation == "move":
+                source, destination = target.split(
+                    "|",
+                    1,
+                )
+
+                return tool.move_file(
+                    source,
+                    destination,
+                )
+
+            if operation == "rename":
+                source, new_name = target.split(
+                    "|",
+                    1,
+                )
+
+                return tool.rename_file(
+                    source,
+                    new_name,
+                )
+
+            return (
+                f"Unsupported file operation: "
+                f"{operation}"
             )
 
-        # =====================================================
-        # MOVE FILE
-        # Format:
-        # move file SOURCE to DESTINATION
-        # =====================================================
-
-        if command_lower.startswith("move file "):
-
-            instruction = command[10:].strip()
-
-            parts = instruction.lower().split(" to ", 1)
-
-            if len(parts) != 2:
-                return (
-                    "Use: move file SOURCE to DESTINATION"
-                )
-
-            source_part, destination_part = parts
-
-            source = instruction[
-                :len(source_part)
-            ].strip()
-
-            destination = instruction[
-                len(source_part) + 4:
-            ].strip()
-
-            if not source or not destination:
-                return (
-                    "Use: move file SOURCE to DESTINATION"
-                )
-
-            return self.file_tools.move_file(
-                source,
-                destination
+        except Exception as error:
+            return (
+                f"File operation failed: {error}"
             )
-
-        # =====================================================
-        # RENAME FILE
-        # Format:
-        # rename file SOURCE to NEW_NAME
-        # =====================================================
-
-        if command_lower.startswith("rename file "):
-
-            instruction = command[12:].strip()
-
-            parts = instruction.lower().split(" to ", 1)
-
-            if len(parts) != 2:
-                return (
-                    "Use: rename file SOURCE to NEW_NAME"
-                )
-
-            source_part, new_name_part = parts
-
-            source = instruction[
-                :len(source_part)
-            ].strip()
-
-            new_name = instruction[
-                len(source_part) + 4:
-            ].strip()
-
-            if not source or not new_name:
-                return (
-                    "Use: rename file SOURCE to NEW_NAME"
-                )
-
-            return self.file_tools.rename_file(
-                source,
-                new_name
-            )
-
-        # =====================================================
-        # UNKNOWN COMMAND
-        # =====================================================
-
-        return f"You said: {command}"
-
-    def stop(self):
-        """Stop ACCESS."""
-
-        self.running = False

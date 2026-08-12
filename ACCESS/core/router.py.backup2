@@ -1,0 +1,336 @@
+"""
+ACCESS Intent Router
+
+Converts natural-language user commands into structured intents.
+"""
+
+from dataclasses import dataclass
+import re
+
+
+@dataclass
+class Intent:
+    """Represents a detected user intent."""
+
+    name: str
+    target: str = ""
+    confidence: float = 0.0
+
+
+class IntentRouter:
+    """Detect user intent from natural-language commands."""
+
+    APPLICATION_ALIASES = {
+        "chrome": "Google Chrome",
+        "google chrome": "Google Chrome",
+        "calculator": "Calculator",
+        "calc": "Calculator",
+        "vscode": "Visual Studio Code",
+        "vs code": "Visual Studio Code",
+        "visual studio code": "Visual Studio Code",
+        "terminal": "Terminal",
+        "safari": "Safari",
+        "finder": "Finder",
+    }
+
+    def route(self, user_input: str) -> Intent:
+        """Analyze user input and return a structured intent."""
+
+        command = user_input.strip()
+
+        if not command:
+            return Intent(
+                name="empty",
+                confidence=1.0,
+            )
+
+        command_lower = command.lower()
+
+        # --------------------------------------------------
+        # EXIT
+        # --------------------------------------------------
+
+        if command_lower in {
+            "exit",
+            "quit",
+            "bye",
+            "goodbye",
+            "close access",
+        }:
+            return Intent(
+                name="exit",
+                confidence=1.0,
+            )
+
+        # --------------------------------------------------
+        # SCREENSHOT
+        # --------------------------------------------------
+
+        screenshot_commands = {
+            "screenshot",
+            "take screenshot",
+            "take a screenshot",
+            "capture screenshot",
+            "capture a screenshot",
+        }
+
+        if command_lower in screenshot_commands:
+            return Intent(
+                name="screenshot",
+                confidence=1.0,
+            )
+
+        # --------------------------------------------------
+        # OPEN APPLICATION
+        # --------------------------------------------------
+
+        open_patterns = [
+            r"^open\s+(.+)$",
+            r"^launch\s+(.+)$",
+            r"^start\s+(.+)$",
+        ]
+
+        for pattern in open_patterns:
+            match = re.match(
+                pattern,
+                command,
+                re.IGNORECASE,
+            )
+
+            if match:
+                target = match.group(1).strip()
+
+                target = self.APPLICATION_ALIASES.get(
+                    target.lower(),
+                    target,
+                )
+
+                return Intent(
+                    name="open_application",
+                    target=target,
+                    confidence=1.0,
+                )
+
+        # --------------------------------------------------
+        # CLOSE APPLICATION
+        # --------------------------------------------------
+
+        close_patterns = [
+            r"^close\s+(.+)$",
+            r"^quit\s+(.+)$",
+            r"^stop\s+(.+)$",
+        ]
+
+        for pattern in close_patterns:
+            match = re.match(
+                pattern,
+                command,
+                re.IGNORECASE,
+            )
+
+            if match:
+                target = match.group(1).strip()
+
+                target = self.APPLICATION_ALIASES.get(
+                    target.lower(),
+                    target,
+                )
+
+                return Intent(
+                    name="close_application",
+                    target=target,
+                    confidence=1.0,
+                )
+
+        # --------------------------------------------------
+        # CREATE FILE
+        # --------------------------------------------------
+
+        create_patterns = [
+            r"^create\s+file\s+(.+)$",
+            r"^create\s+(.+)$",
+        ]
+
+        for pattern in create_patterns:
+            match = re.match(
+                pattern,
+                command,
+                re.IGNORECASE,
+            )
+
+            if match:
+                target = match.group(1).strip()
+
+                return Intent(
+                    name="create_file",
+                    target=target,
+                    confidence=1.0,
+                )
+
+        # --------------------------------------------------
+        # READ FILE
+        # --------------------------------------------------
+
+        read_patterns = [
+            r"^read\s+file\s+(.+)$",
+            r"^read\s+(.+)$",
+        ]
+
+        for pattern in read_patterns:
+            match = re.match(
+                pattern,
+                command,
+                re.IGNORECASE,
+            )
+
+            if match:
+                target = match.group(1).strip()
+
+                return Intent(
+                    name="read_file",
+                    target=target,
+                    confidence=1.0,
+                )
+
+        # --------------------------------------------------
+        # DELETE FILE
+        # --------------------------------------------------
+
+        delete_patterns = [
+            r"^delete\s+file\s+(.+)$",
+            r"^delete\s+(.+)$",
+            r"^remove\s+file\s+(.+)$",
+            r"^remove\s+(.+)$",
+        ]
+
+        for pattern in delete_patterns:
+            match = re.match(
+                pattern,
+                command,
+                re.IGNORECASE,
+            )
+
+            if match:
+                target = match.group(1).strip()
+
+                return Intent(
+                    name="delete_file",
+                    target=target,
+                    confidence=1.0,
+                )
+
+        # --------------------------------------------------
+        # SEARCH FILE
+        # --------------------------------------------------
+
+        search_patterns = [
+            r"^search\s+file\s+(.+)$",
+            r"^find\s+file\s+(.+)$",
+        ]
+
+        for pattern in search_patterns:
+            match = re.match(
+                pattern,
+                command,
+                re.IGNORECASE,
+            )
+
+            if match:
+                target = match.group(1).strip()
+
+                return Intent(
+                    name="search_file",
+                    target=target,
+                    confidence=1.0,
+                )
+
+        # --------------------------------------------------
+        # COPY FILE
+        #
+        # Format:
+        # copy file SOURCE to DESTINATION
+        # --------------------------------------------------
+
+        copy_pattern = (
+            r"^copy\s+file\s+(.+?)\s+to\s+(.+)$"
+        )
+
+        match = re.match(
+            copy_pattern,
+            command,
+            re.IGNORECASE,
+        )
+
+        if match:
+            source = match.group(1).strip()
+            destination = match.group(2).strip()
+
+            return Intent(
+                name="copy_file",
+                target=f"{source}|{destination}",
+                confidence=1.0,
+            )
+
+        # --------------------------------------------------
+        # MOVE FILE
+        #
+        # Format:
+        # move file SOURCE to DESTINATION
+        # --------------------------------------------------
+
+        move_pattern = (
+            r"^move\s+file\s+(.+?)\s+to\s+(.+)$"
+        )
+
+        match = re.match(
+            move_pattern,
+            command,
+            re.IGNORECASE,
+        )
+
+        if match:
+            source = match.group(1).strip()
+            destination = match.group(2).strip()
+
+            return Intent(
+                name="move_file",
+                target=f"{source}|{destination}",
+                confidence=1.0,
+            )
+
+        # --------------------------------------------------
+        # RENAME FILE
+        #
+        # Format:
+        # rename file SOURCE to NEW_NAME
+        # --------------------------------------------------
+
+        rename_pattern = (
+            r"^rename\s+file\s+(.+?)\s+to\s+(.+)$"
+        )
+
+        match = re.match(
+            rename_pattern,
+            command,
+            re.IGNORECASE,
+        )
+
+        if match:
+            source = match.group(1).strip()
+            new_name = match.group(2).strip()
+
+            return Intent(
+                name="rename_file",
+                target=f"{source}|{new_name}",
+                confidence=1.0,
+            )
+
+        # --------------------------------------------------
+        # UNKNOWN
+        # --------------------------------------------------
+
+        return Intent(
+            name="unknown",
+            target=command,
+            confidence=0.0,
+        )
