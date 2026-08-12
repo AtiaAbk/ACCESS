@@ -6,24 +6,42 @@ class TaskPlanner:
 
     WORKSPACE_PRESETS = {
         "development workspace": [
-            TaskStep(action="open_application", target="VS Code"),
-            TaskStep(action="open_application", target="Terminal"),
-            TaskStep(action="open_application", target="browser"),
+            TaskStep(
+                action="open_application",
+                target="VS Code",
+            ),
+            TaskStep(
+                action="open_application",
+                target="Terminal",
+            ),
+            TaskStep(
+                action="open_application",
+                target="Google Chrome",
+            ),
         ],
+
         "writing workspace": [
-            TaskStep(action="open_application", target="Notes"),
-            TaskStep(action="open_application", target="browser"),
+            TaskStep(
+                action="open_application",
+                target="Notes",
+            ),
+            TaskStep(
+                action="open_application",
+                target="Google Chrome",
+            ),
         ],
     }
 
     def plan(self, text: str):
-        """Return a list of TaskStep if the request matches a known compound
-        workflow, otherwise an empty list (meaning: not multi-step)."""
+        """
+        Return a list of TaskStep if the request matches
+        a known compound workflow, otherwise an empty list.
+        """
 
         cleaned = text.strip().lower()
 
         for key, steps in self.WORKSPACE_PRESETS.items():
             if key in cleaned:
-                return steps
+                return list(steps)
 
         return []
