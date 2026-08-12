@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core.router import IntentRouter
 from tools.system_tools import SystemControl
+from memory.database import MemoryDatabase
 
 
 class AccessEngine:
@@ -14,6 +15,10 @@ class AccessEngine:
     def __init__(self):
         self.router = IntentRouter()
         self.system = SystemControl()
+
+        # Local SQLite memory
+        self.memory = MemoryDatabase()
+
         self.running = True
 
         # Pending dangerous/destructive action.
@@ -31,7 +36,22 @@ class AccessEngine:
     # =====================================================
 
     def process(self, user_input: str) -> str:
-        """Process a user command and return a response."""
+        """Process a user command and store the interaction in ACCESS memory."""
+
+        response = self._process_command(user_input)
+
+        # Memory should never crash ACCESS.
+        try:
+            command = user_input.strip()
+            if command:
+                self.memory.save(command, response)
+        except Exception:
+            pass
+
+        return response
+
+    def _process_command(self, user_input: str) -> str:
+        """Process a command without memory handling."""
 
         command = user_input.strip()
 
@@ -112,6 +132,24 @@ class AccessEngine:
             return self._handle_file_operation("rename", intent.target)
 
         return f"I don't know how to handle: {command}"
+
+    # =====================================================
+    # MEMORY
+    # =====================================================
+
+    def get_recent_memory(self, limit=10):
+        """Return recent ACCESS memories."""
+        try:
+            return self.memory.recent(limit)
+        except Exception:
+            return []
+
+    def search_memory(self, query: str, limit=10):
+        """Search stored ACCESS memories."""
+        try:
+            return self.memory.search(query, limit)
+        except Exception:
+            return []
 
     # =====================================================
     # CONFIRMATION

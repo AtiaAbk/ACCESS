@@ -1,137 +1,123 @@
 import sqlite3
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
 
 
 class MemoryDatabase:
-    """Local SQLite database for ACCESS memory."""
+    """Local SQLite memory system for ACCESS."""
 
-    def __init__(self):
-        self.database_directory = (
-            Path(__file__).resolve().parent.parent
-            / "data"
-        )
+    def __init__(self, db_path=None):
+        if db_path is None:
+            db_path = Path(__file__).resolve().parent / "access_memory.db"
 
-        self.database_directory.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+        self.db_path = db_path
+        self._memory_connection = None
 
-        self.database_path = (
-            self.database_directory
-            / "access.db"
-        )
+        if db_path == ":memory:":
+            self._memory_connection = sqlite3.connect(":memory:")
+        else:
+            self.db_path = Path(db_path)
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self._initialize_database()
+        self._initialize()
 
     def _connect(self):
-        """Create a database connection."""
+        """Return the database connection."""
+        if self._memory_connection is not None:
+            return self._memory_connection
 
-        return sqlite3.connect(
-            self.database_path
+        return sqlite3.connect(self.db_path)
+
+    def _initialize(self):
+        """Create the memories table."""
+        conn = self._connect()
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_input TEXT NOT NULL,
+                response TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+        if self._memory_connection is None:
+            conn.close()
+
+    def save(self, user_input: str, response: str):
+        """Save a command and its response."""
+        conn = self._connect()
+
+        conn.execute(
+            """
+            INSERT INTO memories
+            (user_input, response, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (
+                user_input,
+                response,
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+
+        if self._memory_connection is None:
+            conn.close()
+
+    def recent(self, limit=10):
+        """Return recent memories."""
+        conn = self._connect()
+
+        cursor = conn.execute(
+            """
+            SELECT user_input, response, created_at
+            FROM memories
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
         )
 
-    def _initialize_database(self):
-        """Create required database tables."""
+        results = cursor.fetchall()
 
-        with self._connect() as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS notes (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    content TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-                """
-            )
+        if self._memory_connection is None:
+            conn.close()
 
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS conversations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_message TEXT NOT NULL,
-                    assistant_response TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-                """
-            )
+        return results
 
-    def add_note(self, content: str) -> str:
-        """Store a note."""
+    def search(self, query: str, limit=10):
+        """Search stored memories."""
+        conn = self._connect()
 
-        timestamp = datetime.now().isoformat(
-            timespec="seconds"
+        cursor = conn.execute(
+            """
+            SELECT user_input, response, created_at
+            FROM memories
+            WHERE user_input LIKE ?
+               OR response LIKE ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (
+                f"%{query}%",
+                f"%{query}%",
+                limit,
+            ),
         )
 
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO notes (content, created_at)
-                VALUES (?, ?)
-                """,
-                (content, timestamp),
-            )
+        results = cursor.fetchall()
 
-        return "Note saved successfully."
+        if self._memory_connection is None:
+            conn.close()
 
-    def get_notes(self):
-        """Retrieve stored notes."""
+        return results
 
-        with self._connect() as connection:
-            cursor = connection.execute(
-                """
-                SELECT id, content, created_at
-                FROM notes
-                ORDER BY id DESC
-                """
-            )
-
-            return cursor.fetchall()
-
-    def save_conversation(
-        self,
-        user_message: str,
-        assistant_response: str,
-    ):
-        """Save a conversation."""
-
-        timestamp = datetime.now().isoformat(
-            timespec="seconds"
-        )
-
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO conversations
-                (
-                    user_message,
-                    assistant_response,
-                    created_at
-                )
-                VALUES (?, ?, ?)
-                """,
-                (
-                    user_message,
-                    assistant_response,
-                    timestamp,
-                ),
-            )
-
-    def get_recent_conversations(self, limit: int = 10):
-        """Retrieve recent conversations."""
-
-        with self._connect() as connection:
-            cursor = connection.execute(
-                """
-                SELECT
-                    user_message,
-                    assistant_response,
-                    created_at
-                FROM conversations
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (limit,),
-            )
-
-            return cursor.fetchall()
+    def close(self):
+        """Close the in-memory connection."""
+        if self._memory_connection is not None:
+            self._memory_connection.close()
+            self._memory_connection = None
