@@ -221,15 +221,36 @@ class SystemControl:
 
         try:
             if self.system == "Darwin":
+                current_state = subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        "output muted of (get volume settings)",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+
+                is_muted = (
+                    current_state.stdout.strip().lower() == "true"
+                )
+
+                new_state = "false" if is_muted else "true"
+
                 subprocess.run(
                     [
                         "osascript",
                         "-e",
-                        "set volume with output muted not (output muted of (get volume settings))",
+                        f"set volume output muted {new_state}",
                     ],
                     check=True,
                 )
-                return "Mute state toggled."
+
+                if new_state == "true":
+                    return "System audio muted."
+
+                return "System audio unmuted."
 
             if self.system == "Windows":
                 return "Mute control is not implemented for Windows yet."

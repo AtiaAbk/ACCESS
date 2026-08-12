@@ -9,7 +9,6 @@ from rich.text import Text
 
 from core.engine import AccessEngine
 
-
 # ============================================================
 # CONFIGURATION
 # ============================================================
@@ -25,7 +24,6 @@ VERSION = "1.0"
 MODE = "OFFLINE-FIRST"
 
 console = Console()
-
 
 # ============================================================
 # BANNER
@@ -57,7 +55,7 @@ def show_banner():
         style="bold cyan",
     )
     banner.append(
-        "╚═╝  ╚═╝ ╚═════╝ ╚═════╝╚══════╝╚══════╝╚══════╝",
+        "╚═╝  ╚═╝ ╚═════╝╚═════╝╚══════╝╚══════╝╚══════╝",
         style="bold cyan",
     )
 
@@ -85,7 +83,6 @@ def show_banner():
             padding=(1, 2),
         )
     )
-
 
 # ============================================================
 # SYSTEM STATUS
@@ -122,7 +119,7 @@ def show_system_status(engine):
 
     table.add_row(
         "[bold cyan]PLATFORM[/bold cyan]",
-        os.uname().sysname,
+        os.name if os.name != "posix" else __import__("platform").system(),
     )
 
     table.add_row(
@@ -137,7 +134,6 @@ def show_system_status(engine):
             border_style="blue",
         )
     )
-
 
 # ============================================================
 # HELP
@@ -186,7 +182,6 @@ def show_help():
 
     console.print(table)
 
-
 # ============================================================
 # ABOUT
 # ============================================================
@@ -223,7 +218,6 @@ def show_about():
             border_style="cyan",
         )
     )
-
 
 # ============================================================
 # MAIN APPLICATION
@@ -296,7 +290,6 @@ def start_access():
         console.print(
             f"[cyan]ACCESS:[/cyan] {response}"
         )
-
 
 # ============================================================
 # ENTRY POINT
