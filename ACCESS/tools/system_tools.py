@@ -4,6 +4,7 @@ import subprocess
 
 class SystemControl:
     """Cross-platform system control tools."""
+    
 
     def __init__(self):
         self.system = platform.system()
