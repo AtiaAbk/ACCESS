@@ -36,7 +36,8 @@ class IntentRouter:
     def route(self, user_input: str) -> Intent:
         """Analyze user input and return a structured intent."""
 
-        command = user_input.strip()
+        # Normalize whitespace without changing the command meaning.
+        command = " ".join(user_input.strip().split())
 
         if not command:
             return Intent(
@@ -235,7 +236,6 @@ class IntentRouter:
         ]
 
         for pattern in open_patterns:
-
             match = re.match(
                 pattern,
                 command,
@@ -243,7 +243,6 @@ class IntentRouter:
             )
 
             if match:
-
                 target = match.group(1).strip()
 
                 target = self.APPLICATION_ALIASES.get(
@@ -268,7 +267,6 @@ class IntentRouter:
         ]
 
         for pattern in close_patterns:
-
             match = re.match(
                 pattern,
                 command,
@@ -276,7 +274,6 @@ class IntentRouter:
             )
 
             if match:
-
                 target = match.group(1).strip()
 
                 target = self.APPLICATION_ALIASES.get(
@@ -300,7 +297,6 @@ class IntentRouter:
         ]
 
         for pattern in create_patterns:
-
             match = re.match(
                 pattern,
                 command,
@@ -308,7 +304,6 @@ class IntentRouter:
             )
 
             if match:
-
                 return Intent(
                     name="create_file",
                     target=match.group(1).strip(),
@@ -325,7 +320,6 @@ class IntentRouter:
         ]
 
         for pattern in read_patterns:
-
             match = re.match(
                 pattern,
                 command,
@@ -333,7 +327,6 @@ class IntentRouter:
             )
 
             if match:
-
                 return Intent(
                     name="read_file",
                     target=match.group(1).strip(),
@@ -352,7 +345,6 @@ class IntentRouter:
         ]
 
         for pattern in delete_patterns:
-
             match = re.match(
                 pattern,
                 command,
@@ -360,7 +352,6 @@ class IntentRouter:
             )
 
             if match:
-
                 return Intent(
                     name="delete_file",
                     target=match.group(1).strip(),
@@ -377,7 +368,6 @@ class IntentRouter:
         ]
 
         for pattern in search_patterns:
-
             match = re.match(
                 pattern,
                 command,
@@ -385,7 +375,6 @@ class IntentRouter:
             )
 
             if match:
-
                 return Intent(
                     name="search_file",
                     target=match.group(1).strip(),
@@ -403,7 +392,6 @@ class IntentRouter:
         )
 
         if match:
-
             return Intent(
                 name="copy_file",
                 target=(
@@ -425,7 +413,6 @@ class IntentRouter:
         )
 
         if match:
-
             return Intent(
                 name="move_file",
                 target=(
@@ -447,7 +434,6 @@ class IntentRouter:
         )
 
         if match:
-
             return Intent(
                 name="rename_file",
                 target=(

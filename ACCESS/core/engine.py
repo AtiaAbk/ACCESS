@@ -20,7 +20,6 @@ class AccessEngine:
         self.running = True
 
         # Pending dangerous/destructive action.
-        # Example: "shutdown"
         self.pending_action = None
 
         # Actions that require explicit confirmation.
@@ -54,6 +53,13 @@ class AccessEngine:
         # -------------------------------------------------
 
         intent = self.router.route(command)
+
+        # -------------------------------------------------
+        # EMPTY
+        # -------------------------------------------------
+
+        if intent.name == "empty":
+            return "Please enter a command."
 
         # -------------------------------------------------
         # EXIT
@@ -179,6 +185,9 @@ class AccessEngine:
         confirmation state.
         """
 
+        if action not in self.confirmation_actions:
+            return "This action is not configured for confirmation."
+
         self.pending_action = action
 
         if action == "shutdown":
@@ -202,6 +211,7 @@ class AccessEngine:
         if action == "sleep":
             return (
                 "Sleep requested.\n"
+                "ACCESS will NOT put the computer to sleep yet.\n"
                 "Type 'yes', 'sure', or 'ok' to confirm.\n"
                 "Type 'cancel' to abort."
             )
