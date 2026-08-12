@@ -4,23 +4,64 @@ import subprocess
 
 class SystemControl:
     """Cross-platform system control tools."""
-    
 
     def __init__(self):
         self.system = platform.system()
 
+    # =====================================================
+    # APPLICATION CONTROL
+    # =====================================================
+
     def open_application(self, application_name: str) -> str:
-        """Open an application by name."""
+        """
+        Open an application.
+
+        On macOS, if the application is already running,
+        bring it to the foreground instead of returning an error.
+        """
 
         if not application_name:
             return "Please specify an application."
 
+        application_name = application_name.strip()
+
         try:
             if self.system == "Darwin":
+
+                # Check whether the application is already running
+                check = subprocess.run(
+                    [
+                        "pgrep",
+                        "-x",
+                        application_name,
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+
+                if check.returncode == 0:
+                    # Application is already running.
+                    # Bring it to the foreground.
+                    subprocess.run(
+                        [
+                            "osascript",
+                            "-e",
+                            f'tell application "{application_name}" to activate',
+                        ],
+                        check=True,
+                    )
+
+                    return (
+                        f"{application_name} is already open. "
+                        f"Bringing it to the foreground."
+                    )
+
+                # Application is not running.
                 subprocess.run(
                     ["open", "-a", application_name],
                     check=True,
                 )
+
                 return f"Opening {application_name}."
 
             if self.system == "Windows":
@@ -48,6 +89,80 @@ class SystemControl:
 
         except Exception as error:
             return f"Unable to open {application_name}: {error}"
+
+    def close_application(self, application_name: str) -> str:
+        """
+        Close an application.
+
+        On macOS, request the application to quit gracefully.
+        """
+
+        if not application_name:
+            return "Please specify an application."
+
+        application_name = application_name.strip()
+
+        try:
+            if self.system == "Darwin":
+
+                # Check whether the application is running.
+                check = subprocess.run(
+                    [
+                        "pgrep",
+                        "-x",
+                        application_name,
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+
+                if check.returncode != 0:
+                    return f"{application_name} is not currently open."
+
+                # Ask macOS application to quit gracefully.
+                subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        f'tell application "{application_name}" to quit',
+                    ],
+                    check=True,
+                )
+
+                return f"Closed {application_name}."
+
+            if self.system == "Windows":
+                subprocess.run(
+                    [
+                        "taskkill",
+                        "/IM",
+                        f"{application_name}.exe",
+                    ],
+                    check=True,
+                )
+                return f"Closed {application_name}."
+
+            if self.system == "Linux":
+                subprocess.run(
+                    ["pkill", "-x", application_name],
+                    check=True,
+                )
+                return f"Closed {application_name}."
+
+            return (
+                f"Closing applications is not supported "
+                f"on {self.system}."
+            )
+
+        except subprocess.CalledProcessError:
+            return f"Unable to close {application_name}."
+
+        except Exception as error:
+            return f"Unable to close {application_name}: {error}"
+
+    # =====================================================
+    # SCREEN LOCK
+    # =====================================================
 
     def lock_screen(self) -> str:
         """Lock the current computer."""
@@ -85,6 +200,10 @@ class SystemControl:
 
         except Exception as error:
             return f"Unable to lock screen: {error}"
+
+    # =====================================================
+    # VOLUME
+    # =====================================================
 
     def volume_up(self) -> str:
         """Increase system volume."""
@@ -163,6 +282,10 @@ class SystemControl:
 
         except Exception as error:
             return f"Unable to toggle mute: {error}"
+
+    # =====================================================
+    # POWER
+    # =====================================================
 
     def shutdown(self) -> str:
         """Return shutdown status without executing shutdown."""

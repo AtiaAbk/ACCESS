@@ -66,7 +66,20 @@ class AccessEngine:
             return self.system_tools.open_application(
                 application_name
             )
+                # =====================================================
+        # CLOSE APPLICATION
+        # =====================================================
 
+        if command_lower.startswith("close "):
+
+            application_name = command[6:].strip()
+
+            if not application_name:
+                return "Please specify an application."
+
+            return self.system_tools.close_application(
+                application_name
+            )
         # =====================================================
         # CREATE FILE
         # =====================================================
