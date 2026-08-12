@@ -1,4 +1,5 @@
-from tools.system_tools import SystemTools
+
+from tools.system_tools import SystemControl
 from tools.screenshot_tools import ScreenshotTools
 from tools.file_tools import FileTools
 
@@ -14,7 +15,7 @@ class AccessEngine:
     def __init__(self):
         self.running = True
 
-        self.system_tools = SystemTools()
+        self.system_tools = SystemControl()
         self.screenshot_tools = ScreenshotTools()
         self.file_tools = FileTools()
 
@@ -100,7 +101,7 @@ class AccessEngine:
         # =====================================================
         # COPY FILE
         # Format:
-        # copy file source to destination
+        # copy file SOURCE to DESTINATION
         # =====================================================
 
         if command_lower.startswith("copy file "):
@@ -136,6 +137,8 @@ class AccessEngine:
 
         # =====================================================
         # MOVE FILE
+        # Format:
+        # move file SOURCE to DESTINATION
         # =====================================================
 
         if command_lower.startswith("move file "):
