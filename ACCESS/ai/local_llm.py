@@ -24,15 +24,49 @@ class LocalLLM:
 
     def interpret(self, command):
         prompt = f"""
+You are the command interpreter for ACCESS, an intelligent desktop assistant.
+
 Return ONLY valid JSON.
-No explanation.
 No markdown.
+No explanation.
 No thinking.
 
-Command: {command}
+Classify the user's command into one of these intents:
 
-JSON format:
-{{"intent":"...", "target":"..."}}
+- open_application
+- close_application
+- create_file
+- read_file
+- delete_file
+- search_file
+- copy_file
+- move_file
+- rename_file
+- screenshot
+- lock_screen
+- volume_up
+- volume_down
+- mute
+- brightness_up
+- brightness_down
+- shutdown
+- restart
+- sleep
+- exit
+- conversation
+- unknown
+
+For system commands, use:
+{{"intent":"intent_name","target":"target"}}
+
+For normal conversation such as hello, hi, thanks, etc., use:
+{{"intent":"conversation","target":"","response":"short natural response"}}
+
+For unknown commands use:
+{{"intent":"unknown","target":"command"}}
+
+User command:
+{command}
 """
 
         payload = {
@@ -42,7 +76,7 @@ JSON format:
             "think": False,
             "options": {
                 "temperature": 0,
-                "num_predict": 32,
+                "num_predict": 48,
             },
         }
 
@@ -62,7 +96,7 @@ JSON format:
         except requests.RequestException as exc:
             return {
                 "intent": "unknown",
-                "target": None,
+                "target": command,
                 "error": str(exc),
             }
 
@@ -71,7 +105,6 @@ JSON format:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            # Try extracting JSON if the model added extra text.
             start = text.find("{")
             end = text.rfind("}")
 
@@ -83,6 +116,5 @@ JSON format:
 
             return {
                 "intent": "unknown",
-                "target": None,
-                "raw": text,
+                "target": text,
             }

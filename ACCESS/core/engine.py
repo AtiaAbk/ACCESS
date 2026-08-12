@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 
 from ai.decision_engine import AIDecisionEngine
+from ai.local_llm import LocalLLM
 from core.router import IntentRouter
 from memory.database import MemoryDatabase
 from tools.system_tools import SystemControl
@@ -17,8 +18,9 @@ class AccessEngine:
 
     Responsibilities:
     - Receive user commands
-    - Interpret natural-language commands through AI
-    - Fall back to deterministic IntentRouter
+    - Interpret commands through AI
+    - Use deterministic router
+    - Fall back to Local LLM
     - Execute single-step and multi-step tasks
     - Handle dangerous-action confirmation
     - Handle screenshots
@@ -33,10 +35,11 @@ class AccessEngine:
 
         self.router = IntentRouter()
         self.ai = AIDecisionEngine()
+        self.local_llm = LocalLLM()
         self.system = SystemControl()
         self.memory = MemoryDatabase()
 
-        # Compatibility alias.
+        # Compatibility alias
         self.system_tools = self.system
 
         # -------------------------------------------------
@@ -68,15 +71,15 @@ class AccessEngine:
 
             User Input
                  ↓
-            Confirmation check
+            Confirmation
                  ↓
             AI Decision Engine
                  ↓
-            AIResult
+            Deterministic Router
                  ↓
-            Single-step / Multi-step execution
+            Local LLM fallback
                  ↓
-            Router fallback
+            Intent Execution
                  ↓
             Memory
         """
@@ -85,6 +88,7 @@ class AccessEngine:
 
         if not command:
             response = "Please enter a command."
+            self._save_memory(command, response)
             return response
 
         # -------------------------------------------------
@@ -97,7 +101,7 @@ class AccessEngine:
             return response
 
         # -------------------------------------------------
-        # AI INTERPRETATION
+        # AI DECISION ENGINE
         # -------------------------------------------------
 
         recent_memory = self.get_recent_memory(5)
@@ -108,7 +112,7 @@ class AccessEngine:
                 recent_memory=recent_memory,
             )
         except Exception:
-            # AI failure must never destroy core functionality.
+            # AI failure must never crash ACCESS.
             ai_result = None
 
         # -------------------------------------------------
@@ -160,11 +164,99 @@ class AccessEngine:
 
                 return response
 
-        # -------------------------------------------------
-        # DETERMINISTIC ROUTER FALLBACK
-        # -------------------------------------------------
+        # =================================================
+        # DETERMINISTIC ROUTER
+        # =================================================
 
         intent = self.router.route(command)
+
+        # -------------------------------------------------
+        # Router successfully recognized command
+        # -------------------------------------------------
+
+        if intent.name != "unknown":
+            response = self._execute_intent(
+                intent.name,
+                intent.target,
+            )
+
+            self._save_memory(
+                command,
+                response,
+            )
+
+            return response
+
+        # =================================================
+        # LOCAL LLM FALLBACK
+        # =================================================
+
+        if self.local_llm.is_available():
+
+            try:
+                local_result = self.local_llm.interpret(
+                    command
+                )
+
+                if not isinstance(local_result, dict):
+                    local_result = {}
+
+                local_intent = local_result.get(
+                    "intent",
+                    "unknown",
+                )
+
+                local_target = local_result.get(
+                    "target",
+                    "",
+                )
+
+                local_response = local_result.get(
+                    "response",
+                    "",
+                )
+
+                # -----------------------------------------
+                # NORMAL CONVERSATION
+                # -----------------------------------------
+
+                if local_intent == "conversation":
+                    response = (
+                        local_response
+                        or "I'm here to help."
+                    )
+
+                    self._save_memory(
+                        command,
+                        response,
+                    )
+
+                    return response
+
+                # -----------------------------------------
+                # LOCAL LLM SYSTEM INTENT
+                # -----------------------------------------
+
+                if local_intent != "unknown":
+                    response = self._execute_intent(
+                        local_intent,
+                        local_target,
+                    )
+
+                    self._save_memory(
+                        command,
+                        response,
+                    )
+
+                    return response
+
+            except Exception:
+                # Local LLM failure must never crash ACCESS.
+                pass
+
+        # =================================================
+        # FINAL UNKNOWN
+        # =================================================
 
         response = self._execute_intent(
             intent.name,
@@ -189,14 +281,12 @@ class AccessEngine:
     ) -> str:
         """
         Execute one structured intent.
-
-        Used by:
-        - AI layer
-        - Router fallback
-        - Task planner
         """
 
-        intent_name = (intent_name or "").strip().lower()
+        intent_name = (
+            intent_name or ""
+        ).strip().lower()
+
         target = target or ""
 
         # -------------------------------------------------
@@ -217,7 +307,10 @@ class AccessEngine:
                     f"{target}"
                 )
 
-            return "I don't know how to handle that command."
+            return (
+                "I don't know how to handle "
+                "that command."
+            )
 
         # -------------------------------------------------
         # EXIT
@@ -361,18 +454,12 @@ class AccessEngine:
     def _execute_plan(self, steps) -> str:
         """
         Execute TaskStep objects in order.
-
-        Example:
-
-            development workspace
-                ↓
-            VS Code
-            Terminal
-            browser
         """
 
         if not steps:
-            return "No execution steps were generated."
+            return (
+                "No execution steps were generated."
+            )
 
         results = []
 
@@ -393,13 +480,7 @@ class AccessEngine:
                 f"Step {index}: {result}"
             )
 
-            # ---------------------------------------------
-            # IMPORTANT
-            # ---------------------------------------------
-            # Never continue after a confirmation request.
-            # The next user message must be the confirmation.
-            # ---------------------------------------------
-
+            # Never continue after confirmation request.
             if self.pending_action is not None:
                 break
 
@@ -438,26 +519,33 @@ class AccessEngine:
         if action == "shutdown":
             return (
                 "Shutdown requested.\n"
-                "ACCESS will NOT shut down the computer yet.\n"
+                "ACCESS will NOT shut down the "
+                "computer yet.\n"
                 "Please save your work first.\n"
-                "Type 'yes', 'sure', or 'ok' to confirm.\n"
+                "Type 'yes', 'sure', or 'ok' "
+                "to confirm.\n"
                 "Type 'cancel' to abort."
             )
 
         if action == "restart":
             return (
                 "Restart requested.\n"
-                "ACCESS will NOT restart the computer yet.\n"
+                "ACCESS will NOT restart the "
+                "computer yet.\n"
                 "Please save your work first.\n"
-                "Type 'yes', 'sure', or 'ok' to confirm.\n"
+                "Type 'yes', 'sure', or 'ok' "
+                "to confirm.\n"
                 "Type 'cancel' to abort."
             )
 
         if action == "sleep":
             return (
                 "Sleep requested.\n"
-                "ACCESS will NOT put the computer to sleep yet.\n"
-                "Type 'yes', 'sure', or 'ok' to confirm.\n"
+                "ACCESS will NOT put the "
+                "computer to sleep yet.\n"
+                "Please save your work first.\n"
+                "Type 'yes', 'sure', or 'ok' "
+                "to confirm.\n"
                 "Type 'cancel' to abort."
             )
 
@@ -516,7 +604,8 @@ class AccessEngine:
 
         return (
             "Confirmation required.\n"
-            "Type 'yes', 'sure', or 'ok' to continue.\n"
+            "Type 'yes', 'sure', or 'ok' "
+            "to continue.\n"
             "Type 'cancel' to abort."
         )
 
@@ -550,9 +639,6 @@ class AccessEngine:
     def _handle_screenshot(self) -> str:
         """
         Capture a screenshot using platform-native tools.
-
-        This preserves the existing screenshot functionality
-        without allowing arbitrary commands.
         """
 
         try:
@@ -749,7 +835,9 @@ class AccessEngine:
                     )
 
                 if not path.is_file():
-                    return f"Not a file: {path}"
+                    return (
+                        f"Not a file: {path}"
+                    )
 
                 content = path.read_text(
                     encoding="utf-8"
@@ -941,7 +1029,8 @@ class AccessEngine:
 
         except UnicodeDecodeError:
             return (
-                "Unable to read the file as UTF-8 text."
+                "Unable to read the file "
+                "as UTF-8 text."
             )
 
         except Exception as error:
