@@ -23,6 +23,13 @@ class IntentRouter:
         "vs code": "Visual Studio Code",
         "visual studio code": "Visual Studio Code",
         "terminal": "Terminal",
+        "notepad": "Notepad",
+        "file explorer": "File Explorer",
+        "explorer": "File Explorer",
+        "files": "File Explorer",
+        "task manager": "Task Manager",
+        "taskmgr": "Task Manager",
+        "paint": "Paint",
         "safari": "Safari",
         "finder": "Finder",
     }

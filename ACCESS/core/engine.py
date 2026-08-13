@@ -737,6 +737,15 @@ class AccessEngine:
                         check=True,
                     )
 
+                elif shutil.which("grim"):
+                    subprocess.run(
+                        [
+                            "grim",
+                            str(filename),
+                        ],
+                        check=True,
+                    )
+
                 elif shutil.which("import"):
                     subprocess.run(
                         [
@@ -758,12 +767,16 @@ class AccessEngine:
                     )
 
                 else:
-                    return (
-                        "Screenshot is unavailable "
-                        "on Linux. Install "
-                        "gnome-screenshot, ImageMagick, "
-                        "or scrot."
-                    )
+                    try:
+                        import pyautogui
+
+                        pyautogui.screenshot().save(filename)
+                    except Exception:
+                        return (
+                            "Screenshot is unavailable on this Linux desktop. "
+                            "Install grim (Wayland), gnome-screenshot, "
+                            "ImageMagick, or scrot."
+                        )
 
             else:
                 return (

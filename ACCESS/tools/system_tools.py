@@ -1,6 +1,8 @@
+import os
 import platform
 import shutil
 import subprocess
+from pathlib import Path
 
 
 class SystemControl:
@@ -13,6 +15,130 @@ class SystemControl:
     # APPLICATION CONTROL
     # =====================================================
 
+    WINDOWS_APPLICATION_ALIASES = {
+        "calculator": "calc.exe",
+        "calc": "calc.exe",
+        "notepad": "notepad.exe",
+        "terminal": "wt.exe",
+        "windows terminal": "wt.exe",
+        "command prompt": "cmd.exe",
+        "cmd": "cmd.exe",
+        "visual studio code": "code.cmd",
+        "vs code": "code.cmd",
+        "vscode": "code.cmd",
+        "google chrome": "chrome.exe",
+        "chrome": "chrome.exe",
+        "file explorer": "explorer.exe",
+        "explorer": "explorer.exe",
+        "files": "explorer.exe",
+        "task manager": "taskmgr.exe",
+        "taskmgr": "taskmgr.exe",
+        "paint": "mspaint.exe",
+    }
+
+    MAC_APPLICATION_ALIASES = {
+        "file explorer": "Finder",
+        "explorer": "Finder",
+        "files": "Finder",
+        "notepad": "TextEdit",
+        "task manager": "Activity Monitor",
+        "taskmgr": "Activity Monitor",
+        "paint": "Preview",
+        "vscode": "Visual Studio Code",
+        "vs code": "Visual Studio Code",
+        "chrome": "Google Chrome",
+    }
+
+    LINUX_APPLICATION_CANDIDATES = {
+        "calculator": ("gnome-calculator", "kcalc", "galculator", "mate-calc", "xcalc"),
+        "calc": ("gnome-calculator", "kcalc", "galculator", "mate-calc", "xcalc"),
+        "google chrome": ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"),
+        "chrome": ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"),
+        "visual studio code": ("code", "codium"),
+        "vscode": ("code", "codium"),
+        "vs code": ("code", "codium"),
+        "terminal": ("x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm"),
+        "notepad": ("gedit", "kate", "mousepad", "xed", "leafpad"),
+        "task manager": ("gnome-system-monitor", "plasma-systemmonitor", "xfce4-taskmanager", "mate-system-monitor"),
+        "taskmgr": ("gnome-system-monitor", "plasma-systemmonitor", "xfce4-taskmanager", "mate-system-monitor"),
+        "paint": ("pinta", "kolourpaint", "drawing"),
+    }
+
+    @classmethod
+    def _resolve_windows_application(cls, application_name: str) -> str | None:
+        """Return a launchable Windows executable or path.
+
+        Friendly display names such as ``Calculator`` are not valid executable
+        names. Resolve known aliases first, then PATH, App Paths, and the common
+        Chrome install locations. Returning ``None`` avoids Windows displaying a
+        misleading asynchronous "cannot find" dialog after ACCESS reports success.
+        """
+
+        requested = application_name.strip()
+        executable = cls.WINDOWS_APPLICATION_ALIASES.get(
+            requested.casefold(), requested
+        )
+
+        requested_path = Path(os.path.expandvars(os.path.expanduser(executable)))
+        if requested_path.is_file():
+            return str(requested_path)
+
+        resolved = shutil.which(executable)
+        if resolved:
+            return resolved
+
+        if executable.casefold() == "chrome.exe":
+            roots = [
+                os.environ.get("PROGRAMFILES"),
+                os.environ.get("PROGRAMFILES(X86)"),
+                os.environ.get("LOCALAPPDATA"),
+            ]
+            for root in filter(None, roots):
+                candidate = Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"
+                if candidate.is_file():
+                    return str(candidate)
+
+        # Windows registers many desktop applications here even when they are
+        # absent from PATH. Import winreg lazily to preserve cross-platform use.
+        try:
+            import winreg
+
+            registry_keys = (
+                (winreg.HKEY_CURRENT_USER, rf"Software\Microsoft\Windows\CurrentVersion\App Paths\{executable}"),
+                (winreg.HKEY_LOCAL_MACHINE, rf"Software\Microsoft\Windows\CurrentVersion\App Paths\{executable}"),
+            )
+            for hive, key_name in registry_keys:
+                try:
+                    with winreg.OpenKey(hive, key_name) as key:
+                        value, _ = winreg.QueryValueEx(key, None)
+                    if value and Path(value).is_file():
+                        return value
+                except OSError:
+                    continue
+        except ImportError:
+            pass
+
+        return None
+
+    @classmethod
+    def _resolve_linux_application(cls, application_name: str) -> list[str] | None:
+        """Resolve friendly names across common Linux desktop environments."""
+
+        requested = application_name.strip()
+        if requested.casefold() in {"file explorer", "explorer", "files"}:
+            opener = shutil.which("xdg-open")
+            return [opener, str(Path.home())] if opener else None
+
+        candidates = cls.LINUX_APPLICATION_CANDIDATES.get(
+            requested.casefold(),
+            (requested,),
+        )
+        for candidate in candidates:
+            executable = shutil.which(candidate)
+            if executable:
+                return [executable]
+        return None
+
     def open_application(self, application_name: str) -> str:
         """Open an application."""
 
@@ -23,6 +149,9 @@ class SystemControl:
 
         try:
             if self.system == "Darwin":
+                application_name = self.MAC_APPLICATION_ALIASES.get(
+                    application_name.casefold(), application_name
+                )
                 check = subprocess.run(
                     ["pgrep", "-x", application_name],
                     stdout=subprocess.DEVNULL,
@@ -50,13 +179,23 @@ class SystemControl:
                 return f"Opening {application_name}."
 
             if self.system == "Windows":
-                subprocess.Popen(
-                    ["cmd", "/c", "start", "", application_name]
-                )
+                launch_target = self._resolve_windows_application(application_name)
+                if launch_target is None:
+                    return (
+                        f"Application not found: {application_name}. "
+                        "Try its executable name or full path."
+                    )
+                subprocess.Popen([launch_target])
                 return f"Opening {application_name}."
 
             if self.system == "Linux":
-                subprocess.Popen([application_name])
+                launch_command = self._resolve_linux_application(application_name)
+                if launch_command is None:
+                    return (
+                        f"Application not found: {application_name}. "
+                        "Install it or use its executable name."
+                    )
+                subprocess.Popen(launch_command)
                 return f"Opening {application_name}."
 
             return f"Opening applications is not supported on {self.system}."
@@ -78,6 +217,9 @@ class SystemControl:
 
         try:
             if self.system == "Darwin":
+                application_name = self.MAC_APPLICATION_ALIASES.get(
+                    application_name.casefold(), application_name
+                )
                 check = subprocess.run(
                     ["pgrep", "-x", application_name],
                     stdout=subprocess.DEVNULL,
@@ -105,10 +247,10 @@ class SystemControl:
                 return f"Closed {application_name}."
 
             if self.system == "Linux":
-                subprocess.run(
-                    ["pkill", "-x", application_name],
-                    check=True,
-                )
+                launch_command = self._resolve_linux_application(application_name)
+                if not launch_command or Path(launch_command[0]).name == "xdg-open":
+                    return f"Unable to identify a running process for {application_name}."
+                subprocess.run(["pkill", "-x", Path(launch_command[0]).name], check=True)
                 return f"Closed {application_name}."
 
             return f"Closing applications is not supported on {self.system}."

@@ -1,11 +1,5 @@
+import argparse
 import os
-
-from dotenv import load_dotenv
-from rich.align import Align
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
 
 from core.engine import AccessEngine
 
@@ -13,7 +7,13 @@ from core.engine import AccessEngine
 # CONFIGURATION
 # ============================================================
 
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ModuleNotFoundError:
+    # The native GUI and offline command engine do not require dotenv.
+    pass
 
 APP_NAME = "ACCESS"
 APP_FULL_NAME = (
@@ -23,7 +23,32 @@ APP_FULL_NAME = (
 VERSION = "1.0"
 MODE = "OFFLINE-FIRST"
 
-console = Console()
+console = None
+
+
+def _load_terminal_ui():
+    """Load Rich only when the classic terminal interface is requested."""
+
+    global Align, Console, Panel, Table, Text, console
+    if console is not None:
+        return
+    try:
+        from rich.align import Align as RichAlign
+        from rich.console import Console as RichConsole
+        from rich.panel import Panel as RichPanel
+        from rich.table import Table as RichTable
+        from rich.text import Text as RichText
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "Terminal mode requires Rich. Run: pip install -r requirements.txt"
+        ) from error
+
+    Align = RichAlign
+    Console = RichConsole
+    Panel = RichPanel
+    Table = RichTable
+    Text = RichText
+    console = Console()
 
 # ============================================================
 # BANNER
@@ -226,6 +251,8 @@ def show_about():
 def start_access():
     """Start ACCESS."""
 
+    _load_terminal_ui()
+
     engine = AccessEngine()
 
     console.clear()
@@ -296,9 +323,30 @@ def start_access():
 # ============================================================
 
 def main():
-    """Application entry point."""
+    """Application entry point. The GUI is the default; ``--cli`` keeps the classic UI."""
 
-    start_access()
+    parser = argparse.ArgumentParser(description=APP_FULL_NAME)
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="run the classic terminal interface",
+    )
+    args = parser.parse_args()
+
+    if args.cli:
+        start_access()
+        return
+
+    try:
+        from ui.gui import start_gui
+
+        start_gui()
+    except (ImportError, __import__("tkinter").TclError) as error:
+        _load_terminal_ui()
+        console.print(
+            f"[yellow]GUI unavailable ({error}). Starting terminal mode.[/yellow]"
+        )
+        start_access()
 
 
 if __name__ == "__main__":
