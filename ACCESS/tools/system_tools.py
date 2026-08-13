@@ -59,12 +59,17 @@ class SystemControl:
                 subprocess.Popen([application_name])
                 return f"Opening {application_name}."
 
-            return f"Opening applications is not supported on {self.system}."
+            return (
+                f"Opening applications is not supported "
+                f"on {self.system}."
+            )
 
         except FileNotFoundError:
             return f"Application not found: {application_name}"
+
         except subprocess.CalledProcessError as error:
             return f"Unable to open {application_name}: {error}"
+
         except Exception as error:
             return f"Unable to open {application_name}: {error}"
 
@@ -95,6 +100,7 @@ class SystemControl:
                     ],
                     check=True,
                 )
+
                 return f"Closed {application_name}."
 
             if self.system == "Windows":
@@ -111,10 +117,14 @@ class SystemControl:
                 )
                 return f"Closed {application_name}."
 
-            return f"Closing applications is not supported on {self.system}."
+            return (
+                f"Closing applications is not supported "
+                f"on {self.system}."
+            )
 
         except subprocess.CalledProcessError:
             return f"Unable to close {application_name}."
+
         except Exception as error:
             return f"Unable to close {application_name}: {error}"
 
@@ -139,7 +149,10 @@ class SystemControl:
 
             if self.system == "Windows":
                 subprocess.run(
-                    ["rundll32.exe", "user32.dll,LockWorkStation"],
+                    [
+                        "rundll32.exe",
+                        "user32.dll,LockWorkStation",
+                    ],
                     check=True,
                 )
                 return "Locking the screen."
@@ -178,10 +191,16 @@ class SystemControl:
                 return "Volume increased."
 
             if self.system == "Windows":
-                return "Volume control is not implemented for Windows yet."
+                return (
+                    "Volume control is not implemented "
+                    "for Windows yet."
+                )
 
             if self.system == "Linux":
-                return "Volume control is not implemented for Linux yet."
+                return (
+                    "Volume control is not implemented "
+                    "for Linux yet."
+                )
 
             return "Volume control is not supported on this system."
 
@@ -206,10 +225,16 @@ class SystemControl:
                 return "Volume decreased."
 
             if self.system == "Windows":
-                return "Volume control is not implemented for Windows yet."
+                return (
+                    "Volume control is not implemented "
+                    "for Windows yet."
+                )
 
             if self.system == "Linux":
-                return "Volume control is not implemented for Linux yet."
+                return (
+                    "Volume control is not implemented "
+                    "for Linux yet."
+                )
 
             return "Volume control is not supported on this system."
 
@@ -253,10 +278,16 @@ class SystemControl:
                 return "System audio unmuted."
 
             if self.system == "Windows":
-                return "Mute control is not implemented for Windows yet."
+                return (
+                    "Mute control is not implemented "
+                    "for Windows yet."
+                )
 
             if self.system == "Linux":
-                return "Mute control is not implemented for Linux yet."
+                return (
+                    "Mute control is not implemented "
+                    "for Linux yet."
+                )
 
             return "Mute control is not supported on this system."
 
@@ -271,14 +302,17 @@ class SystemControl:
         """Change brightness when supported by the platform."""
 
         if self.system == "Darwin":
+
             if shutil.which("brightness") is None:
                 return (
-                    "Brightness control requires the 'brightness' "
-                    "command-line utility on macOS."
+                    "I don't have permission to control "
+                    "brightness because the required "
+                    "'brightness' utility is unavailable."
                 )
 
             try:
                 delta = "+0.1" if direction == "up" else "-0.1"
+
                 subprocess.run(
                     ["brightness", delta],
                     check=True,
@@ -286,15 +320,31 @@ class SystemControl:
 
                 if direction == "up":
                     return "Brightness increased."
+
                 return "Brightness decreased."
 
-            except subprocess.CalledProcessError as error:
-                return f"Unable to change brightness: {error}"
+            except subprocess.CalledProcessError:
+                return (
+                    "I don't have permission to change "
+                    "the brightness."
+                )
+
+            except Exception:
+                return (
+                    "I don't have permission to change "
+                    "the brightness."
+                )
 
         if self.system in {"Windows", "Linux"}:
-            return f"Brightness control is not implemented for {self.system} yet."
+            return (
+                f"I don't have permission to control "
+                f"brightness on {self.system}."
+            )
 
-        return "Brightness control is not supported on this system."
+        return (
+            "I don't have permission to control "
+            "brightness on this system."
+        )
 
     def brightness_up(self) -> str:
         """Increase display brightness."""
@@ -305,6 +355,96 @@ class SystemControl:
         return self._change_brightness("down")
 
     # =====================================================
+    # APPEARANCE / DARK MODE
+    # =====================================================
+
+    def dark_mode(self) -> str:
+        """Enable system dark appearance."""
+
+        try:
+            if self.system == "Darwin":
+                subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        'tell application "System Events" to tell appearance preferences to set dark mode to true',
+                    ],
+                    check=True,
+                )
+
+                return "Dark mode enabled."
+
+            if self.system == "Windows":
+                return (
+                    "I don't have permission to change "
+                    "the system appearance on Windows."
+                )
+
+            if self.system == "Linux":
+                return (
+                    "I don't have permission to change "
+                    "the system appearance on Linux."
+                )
+
+            return (
+                "I don't have permission to change "
+                "the system appearance on this system."
+            )
+
+        except subprocess.CalledProcessError:
+            return (
+                "I don't have permission to enable dark mode."
+            )
+
+        except Exception:
+            return (
+                "I don't have permission to enable dark mode."
+            )
+
+    def light_mode(self) -> str:
+        """Enable system light appearance."""
+
+        try:
+            if self.system == "Darwin":
+                subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        'tell application "System Events" to tell appearance preferences to set dark mode to false',
+                    ],
+                    check=True,
+                )
+
+                return "Light mode enabled."
+
+            if self.system == "Windows":
+                return (
+                    "I don't have permission to change "
+                    "the system appearance on Windows."
+                )
+
+            if self.system == "Linux":
+                return (
+                    "I don't have permission to change "
+                    "the system appearance on Linux."
+                )
+
+            return (
+                "I don't have permission to change "
+                "the system appearance on this system."
+            )
+
+        except subprocess.CalledProcessError:
+            return (
+                "I don't have permission to enable light mode."
+            )
+
+        except Exception:
+            return (
+                "I don't have permission to enable light mode."
+            )
+
+    # =====================================================
     # POWER STATUS
     # =====================================================
 
@@ -312,7 +452,10 @@ class SystemControl:
         """Return shutdown status without executing it."""
 
         if self.system in {"Darwin", "Windows", "Linux"}:
-            return "Shutdown command is available but requires confirmation."
+            return (
+                "Shutdown command is available "
+                "but requires confirmation."
+            )
 
         return "Shutdown is not supported on this system."
 
@@ -320,7 +463,10 @@ class SystemControl:
         """Return restart status without executing it."""
 
         if self.system in {"Darwin", "Windows", "Linux"}:
-            return "Restart command is available but requires confirmation."
+            return (
+                "Restart command is available "
+                "but requires confirmation."
+            )
 
         return "Restart is not supported on this system."
 
@@ -334,17 +480,27 @@ class SystemControl:
         try:
             if self.system == "Darwin":
                 subprocess.run(
-                    ["osascript", "-e", "tell application \"System Events\" to shut down"],
+                    [
+                        "osascript",
+                        "-e",
+                        'tell application "System Events" to shut down',
+                    ],
                     check=True,
                 )
                 return "Shutting down the computer."
 
             if self.system == "Windows":
-                subprocess.run(["shutdown", "/s", "/t", "0"], check=True)
+                subprocess.run(
+                    ["shutdown", "/s", "/t", "0"],
+                    check=True,
+                )
                 return "Shutting down the computer."
 
             if self.system == "Linux":
-                subprocess.run(["systemctl", "poweroff"], check=True)
+                subprocess.run(
+                    ["systemctl", "poweroff"],
+                    check=True,
+                )
                 return "Shutting down the computer."
 
             return "Shutdown is not supported on this system."
@@ -358,17 +514,27 @@ class SystemControl:
         try:
             if self.system == "Darwin":
                 subprocess.run(
-                    ["osascript", "-e", "tell application \"System Events\" to restart"],
+                    [
+                        "osascript",
+                        "-e",
+                        'tell application "System Events" to restart',
+                    ],
                     check=True,
                 )
                 return "Restarting the computer."
 
             if self.system == "Windows":
-                subprocess.run(["shutdown", "/r", "/t", "0"], check=True)
+                subprocess.run(
+                    ["shutdown", "/r", "/t", "0"],
+                    check=True,
+                )
                 return "Restarting the computer."
 
             if self.system == "Linux":
-                subprocess.run(["systemctl", "reboot"], check=True)
+                subprocess.run(
+                    ["systemctl", "reboot"],
+                    check=True,
+                )
                 return "Restarting the computer."
 
             return "Restart is not supported on this system."
@@ -381,7 +547,10 @@ class SystemControl:
 
         try:
             if self.system == "Darwin":
-                subprocess.run(["pmset", "sleepnow"], check=True)
+                subprocess.run(
+                    ["pmset", "sleepnow"],
+                    check=True,
+                )
                 return "Putting the computer to sleep."
 
             if self.system == "Windows":
@@ -401,7 +570,10 @@ class SystemControl:
                 return "Putting the computer to sleep."
 
             if self.system == "Linux":
-                subprocess.run(["systemctl", "suspend"], check=True)
+                subprocess.run(
+                    ["systemctl", "suspend"],
+                    check=True,
+                )
                 return "Putting the computer to sleep."
 
             return "Sleep is not supported on this system."
