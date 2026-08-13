@@ -1,24 +1,6 @@
-<<<<<<< HEAD
 import argparse
 import os
-
-=======
 import platform
-
-from dotenv import load_dotenv
-from rich.align import Align
-from rich.console import Console, Group
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
-
->>>>>>> modification
-from core.engine import AccessEngine
-
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 try:
     from dotenv import load_dotenv
@@ -27,6 +9,13 @@ try:
 except ModuleNotFoundError:
     # The native GUI and offline command engine do not require dotenv.
     pass
+
+from core.engine import AccessEngine
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 APP_NAME = "ACCESS"
 
@@ -45,12 +34,12 @@ console = None
 def _load_terminal_ui():
     """Load Rich only when the classic terminal interface is requested."""
 
-    global Align, Console, Panel, Table, Text, console
+    global Align, Console, Group, Panel, Table, Text, console
     if console is not None:
         return
     try:
         from rich.align import Align as RichAlign
-        from rich.console import Console as RichConsole
+        from rich.console import Console as RichConsole, Group as RichGroup
         from rich.panel import Panel as RichPanel
         from rich.table import Table as RichTable
         from rich.text import Text as RichText
@@ -61,6 +50,7 @@ def _load_terminal_ui():
 
     Align = RichAlign
     Console = RichConsole
+    Group = RichGroup
     Panel = RichPanel
     Table = RichTable
     Text = RichText

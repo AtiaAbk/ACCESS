@@ -38,7 +38,6 @@ class IntentRouter:
         "visual studio code": "Visual Studio Code",
 
         "terminal": "Terminal",
-<<<<<<< HEAD
         "notepad": "Notepad",
         "file explorer": "File Explorer",
         "explorer": "File Explorer",
@@ -46,11 +45,7 @@ class IntentRouter:
         "task manager": "Task Manager",
         "taskmgr": "Task Manager",
         "paint": "Paint",
-=======
-
->>>>>>> modification
         "safari": "Safari",
-
         "finder": "Finder",
     }
 
