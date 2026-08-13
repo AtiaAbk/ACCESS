@@ -52,7 +52,7 @@ QUICK_ACTION_CATALOG = {
 
 DEFAULT_QUICK_ACTIONS = [
     "screenshot", "chrome", "calculator", "vscode", "explorer", "terminal",
-    "notepad", "task_manager", "history", "commands", "new_chat", "lock",
+    "notepad", "task_manager", "history", "commands", "new_chat", "lock", "paint",
 ]
 
 FALLBACK_ACTION_ICONS = {
@@ -65,21 +65,21 @@ FALLBACK_ACTION_ICONS = {
 
 THEMES = {
     "dark": {
-        "bg": "#070B14",
-        "sidebar": "#0B1120",
-        "surface": "#101827",
-        "surface_2": "#151F31",
-        "border": "#23314A",
-        "text": "#F4F7FB",
-        "muted": "#8A98AD",
-        "accent": "#20D3C2",
-        "accent_hover": "#19B8AA",
-        "blue": "#5B8CFF",
-        "user": "#1D4ED8",
-        "success": "#2DD4A7",
+        "bg": "#07111F",
+        "sidebar": "#091525",
+        "surface": "#0D1A2C",
+        "surface_2": "#102036",
+        "border": "#29405C",
+        "text": "#F6F8FC",
+        "muted": "#9AA9C2",
+        "accent": "#08D4C4",
+        "accent_hover": "#00BDAF",
+        "blue": "#2684FF",
+        "user": "#175CD3",
+        "success": "#08D4C4",
         "danger": "#FB7185",
-        "input": "#0D1524",
-        "code_bg": "#080D18",
+        "input": "#0B182A",
+        "code_bg": "#071321",
         "code_text": "#D4D4D4",
         "code_comment": "#6A9955",
         "code_keyword": "#D98BD8",
@@ -90,21 +90,21 @@ THEMES = {
         "code_preprocessor": "#C586C0",
     },
     "light": {
-        "bg": "#F3F6FA",
+        "bg": "#F8FAFC",
         "sidebar": "#FFFFFF",
         "surface": "#FFFFFF",
-        "surface_2": "#EAF0F7",
-        "border": "#D8E0EB",
-        "text": "#152033",
-        "muted": "#65758B",
-        "accent": "#0F9F92",
-        "accent_hover": "#0B877D",
-        "blue": "#356DE8",
-        "user": "#356DE8",
-        "success": "#159F79",
+        "surface_2": "#F4F8FC",
+        "border": "#D7E1EB",
+        "text": "#08162D",
+        "muted": "#60718D",
+        "accent": "#00A99D",
+        "accent_hover": "#00958A",
+        "blue": "#2088F5",
+        "user": "#2674E8",
+        "success": "#08AE73",
         "danger": "#E14C66",
-        "input": "#F7F9FC",
-        "code_bg": "#F0F4F9",
+        "input": "#FFFFFF",
+        "code_bg": "#F2F6FA",
         "code_text": "#263247",
         "code_comment": "#39814D",
         "code_keyword": "#8B3FA2",
@@ -115,6 +115,58 @@ THEMES = {
         "code_preprocessor": "#9C3D84",
     },
 }
+
+
+class RoundedPanel(tk.Canvas):
+    """A responsive rounded container with a normal Frame for child widgets."""
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        panel_bg: str,
+        border: str,
+        radius: int = 14,
+        border_width: int = 1,
+        **kwargs,
+    ):
+        super().__init__(parent, bg=parent.cget("bg"), bd=0, highlightthickness=0, **kwargs)
+        self.panel_bg = panel_bg
+        self.border = border
+        self.radius = radius
+        self.border_width = border_width
+        self.body = tk.Frame(self, bg=panel_bg)
+        self._body_window = self.create_window((border_width + 1, border_width + 1), window=self.body, anchor="nw")
+        self.bind("<Configure>", self._redraw)
+
+    def _redraw(self, event=None) -> None:
+        width = max(2, self.winfo_width())
+        height = max(2, self.winfo_height())
+        radius = min(self.radius, width // 2, height // 2)
+        self.delete("panel_shape")
+        points = [
+            radius, 1, width - radius, 1, width - 1, 1,
+            width - 1, radius, width - 1, height - radius,
+            width - 1, height - 1, width - radius, height - 1,
+            radius, height - 1, 1, height - 1, 1, height - radius,
+            1, radius, 1, 1,
+        ]
+        self.create_polygon(
+            points,
+            smooth=True,
+            splinesteps=24,
+            fill=self.panel_bg,
+            outline=self.border,
+            width=self.border_width,
+            tags="panel_shape",
+        )
+        self.tag_lower("panel_shape")
+        inset = max(5, self.border_width + 1)
+        self.coords(self._body_window, inset, inset)
+        self.itemconfigure(
+            self._body_window,
+            width=max(1, width - inset * 2),
+            height=max(1, height - inset * 2),
+        )
 
 
 class AccessGUI:
@@ -157,12 +209,16 @@ class AccessGUI:
         self.quick_action_items = self._load_quick_actions()
 
         self.root.title(f"{APP_NAME} — Desktop Assistant")
-        self.root.geometry("1180x760")
-        self.root.minsize(900, 620)
+        self.root.geometry("1680x945")
+        self.root.minsize(1180, 720)
+        self.root.overrideredirect(True)
         self.root.configure(bg=self.colors["bg"])
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.app_icon = self._create_app_icon()
         self.root.iconphoto(True, self.app_icon)
+        self._drag_origin = (0, 0)
+        self._restore_geometry = "1680x945+40+40"
+        self._is_maximized = False
 
         self._configure_styles()
         self._build_layout()
@@ -186,20 +242,145 @@ class AccessGUI:
             arrowcolor=self.colors["muted"],
         )
 
+    def _apply_native_titlebar_theme(self) -> None:
+        """Match the Windows title bar to the selected reference theme."""
+
+        if platform.system() != "Windows":
+            return
+        try:
+            import ctypes
+
+            self.root.update_idletasks()
+            value = ctypes.c_int(1 if self.theme_name == "dark" else 0)
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            for attribute in (20, 19):
+                result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd,
+                    attribute,
+                    ctypes.byref(value),
+                    ctypes.sizeof(value),
+                )
+                if result == 0:
+                    break
+        except (AttributeError, OSError):
+            pass
+
     def _build_layout(self) -> None:
-        self.shell = tk.Frame(self.root, bg=self.colors["bg"])
+        c = self.colors
+        self.app_container = tk.Frame(
+            self.root,
+            bg=c["bg"],
+            highlightthickness=1,
+            highlightbackground=c["border"],
+        )
+        self.app_container.pack(fill="both", expand=True)
+        self._build_titlebar()
+        self.shell = tk.Frame(self.app_container, bg=c["bg"])
         self.shell.pack(fill="both", expand=True)
         self._build_sidebar()
         self._build_main()
 
+    def _build_titlebar(self) -> None:
+        c = self.colors
+        titlebar = tk.Frame(
+            self.app_container,
+            height=49,
+            bg=c["sidebar"],
+            highlightthickness=1,
+            highlightbackground=c["border"],
+        )
+        titlebar.pack(fill="x")
+        titlebar.pack_propagate(False)
+        icon = tk.Label(
+            titlebar,
+            text="A",
+            width=2,
+            bg=c["accent"],
+            fg="#06110F",
+            font=("Segoe UI", 10, "bold"),
+        )
+        icon.pack(side="left", padx=(28, 12), pady=10)
+        title = tk.Label(
+            titlebar,
+            text="ACCESS — Desktop Assistant",
+            bg=c["sidebar"],
+            fg=c["text"],
+            font=("Segoe UI", 10),
+        )
+        title.pack(side="left")
+
+        def control(text: str, command: Callable, danger: bool = False) -> tk.Button:
+            button = tk.Button(
+                titlebar,
+                text=text,
+                command=command,
+                width=5,
+                relief="flat",
+                bd=0,
+                bg=c["sidebar"],
+                activebackground=c["danger"] if danger else c["surface_2"],
+                fg=c["text"],
+                activeforeground="#FFFFFF" if danger else c["text"],
+                font=("Segoe UI Symbol", 11),
+                cursor="hand2",
+            )
+            button.pack(side="right", fill="y")
+            return button
+
+        control("×", self.close, danger=True)
+        control("□", self._toggle_maximize)
+        control("—", self._minimize_window)
+        for widget in (titlebar, title, icon):
+            widget.bind("<ButtonPress-1>", self._start_window_drag)
+            widget.bind("<B1-Motion>", self._drag_window)
+            widget.bind("<Double-Button-1>", lambda _event: self._toggle_maximize())
+
+    def _start_window_drag(self, event) -> None:
+        if self._is_maximized:
+            return
+        self._drag_origin = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
+
+    def _drag_window(self, event) -> None:
+        if self._is_maximized:
+            return
+        x = event.x_root - self._drag_origin[0]
+        y = event.y_root - self._drag_origin[1]
+        self.root.geometry(f"+{x}+{y}")
+
+    def _toggle_maximize(self) -> None:
+        if self._is_maximized:
+            self.root.geometry(self._restore_geometry)
+            self._is_maximized = False
+            return
+        self._restore_geometry = self.root.geometry()
+        width = self.root.winfo_screenwidth()
+        height = self.root.winfo_screenheight()
+        self.root.geometry(f"{width}x{height}+0+0")
+        self._is_maximized = True
+
+    def _minimize_window(self) -> None:
+        self.root.overrideredirect(False)
+        self.root.iconify()
+        self.root.bind("<Map>", self._restore_borderless, add="+")
+
+    def _restore_borderless(self, _event=None) -> None:
+        if self.root.state() == "normal":
+            self.root.after(10, lambda: self.root.overrideredirect(True))
+
     def _build_sidebar(self) -> None:
         c = self.colors
-        self.sidebar = tk.Frame(self.shell, width=250, bg=c["sidebar"])
+        self.sidebar = tk.Frame(
+            self.shell,
+            width=320,
+            bg=c["sidebar"],
+            highlightthickness=1,
+            highlightbackground=c["border"],
+        )
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
 
         brand = tk.Frame(self.sidebar, bg=c["sidebar"])
-        brand.pack(fill="x", padx=24, pady=(26, 32))
+        brand.pack(fill="x", padx=30, pady=(22, 12))
         tk.Label(
             brand,
             text="A",
@@ -207,23 +388,23 @@ class AccessGUI:
             height=1,
             bg=c["accent"],
             fg="#06110F",
-            font=("Segoe UI", 20, "bold"),
+            font=("Segoe UI", 22, "bold"),
         ).pack(side="left")
         brand_text = tk.Frame(brand, bg=c["sidebar"])
-        brand_text.pack(side="left", padx=12)
+        brand_text.pack(side="left", padx=14)
         tk.Label(
             brand_text,
             text="ACCESS",
             bg=c["sidebar"],
             fg=c["text"],
-            font=("Segoe UI", 15, "bold"),
+            font=("Segoe UI", 17, "bold"),
         ).pack(anchor="w")
         tk.Label(
             brand_text,
             text="DESKTOP AI",
             bg=c["sidebar"],
             fg=c["accent"],
-            font=("Segoe UI", 8, "bold"),
+            font=("Segoe UI", 9, "bold"),
         ).pack(anchor="w")
 
         tk.Label(
@@ -232,7 +413,7 @@ class AccessGUI:
             bg=c["sidebar"],
             fg=c["muted"],
             font=("Segoe UI", 8, "bold"),
-        ).pack(anchor="w", padx=24, pady=(0, 8))
+        ).pack(anchor="w", padx=34, pady=(0, 8))
 
         self._nav_button("✦", "Assistant", lambda: self.command_entry.focus_set(), active=True)
         self._nav_button("↻", "New conversation", self.clear_conversation)
@@ -240,7 +421,7 @@ class AccessGUI:
         self._nav_button("?", "Commands", self.show_help)
 
         bottom = tk.Frame(self.sidebar, bg=c["sidebar"])
-        bottom.pack(side="bottom", fill="x", padx=18, pady=18)
+        bottom.pack(side="bottom", fill="x", padx=22, pady=(8, 34))
         theme_btn = tk.Button(
             bottom,
             text="☼  Switch theme",
@@ -248,13 +429,13 @@ class AccessGUI:
             anchor="w",
             relief="flat",
             bd=0,
-            padx=12,
-            pady=9,
+            padx=14,
+            pady=11,
             bg=c["surface"],
             activebackground=c["surface_2"],
             fg=c["text"],
             activeforeground=c["text"],
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 10),
             cursor="hand2",
         )
         theme_btn.pack(fill="x")
@@ -267,7 +448,7 @@ class AccessGUI:
         ).pack(anchor="w", padx=12, pady=(14, 0))
 
         quick = tk.Frame(self.sidebar, bg=c["sidebar"])
-        quick.pack(fill="both", expand=True, padx=(18, 12), pady=(24, 8))
+        quick.pack(fill="both", expand=True, padx=(22, 17), pady=(20, 4))
         quick_header = tk.Frame(quick, bg=c["sidebar"])
         quick_header.pack(fill="x", padx=(6, 2), pady=(0, 8))
         tk.Label(
@@ -308,7 +489,8 @@ class AccessGUI:
             style="Access.Vertical.TScrollbar",
         )
         self.quick_canvas.configure(yscrollcommand=quick_scrollbar.set)
-        quick_scrollbar.pack(side="right", fill="y")
+        # The reference uses an unobtrusive wheel-scroll launcher without a
+        # permanently visible scrollbar.
         self.quick_canvas.pack(side="left", fill="both", expand=True)
         self.quick_grid = tk.Frame(self.quick_canvas, bg=c["sidebar"])
         quick_window = self.quick_canvas.create_window((0, 0), window=self.quick_grid, anchor="nw")
@@ -339,16 +521,16 @@ class AccessGUI:
             anchor="w",
             relief="flat",
             bd=0,
-            padx=24,
-            pady=11,
+            padx=30,
+            pady=8,
             bg=bg,
             activebackground=c["surface_2"],
             fg=fg,
             activeforeground=c["text"],
-            font=("Segoe UI", 10, "bold" if active else "normal"),
+            font=("Segoe UI", 11, "bold" if active else "normal"),
             cursor="hand2",
         )
-        button.pack(fill="x", padx=10, pady=2)
+        button.pack(fill="x", padx=20, pady=0)
 
     @staticmethod
     def _settings_file() -> Path:
@@ -728,7 +910,7 @@ class AccessGUI:
         c = self.colors
         tile = tk.Frame(
             parent,
-            height=64,
+            height=53,
             bg=c["surface"],
             highlightthickness=1,
             highlightbackground=c["border"],
@@ -741,7 +923,7 @@ class AccessGUI:
             text=icon,
             bg=c["surface"],
             fg=c["accent"],
-            font=(self.icon_font_family, 16),
+            font=(self.icon_font_family, 17),
             cursor="hand2",
         )
         icon_label.pack(anchor="center", pady=(6, 0))
@@ -750,10 +932,10 @@ class AccessGUI:
             text=label,
             justify="center",
             anchor="center",
-            wraplength=90,
+            wraplength=120,
             bg=c["surface"],
             fg=c["text"],
-            font=("Segoe UI", 8, "bold"),
+            font=("Segoe UI", 9, "bold"),
             cursor="hand2",
         )
         text_label.pack(fill="x", expand=True, padx=3, pady=(1, 6))
@@ -796,52 +978,63 @@ class AccessGUI:
         self.main = tk.Frame(self.shell, bg=c["bg"])
         self.main.pack(side="left", fill="both", expand=True)
 
-        header = tk.Frame(self.main, bg=c["bg"], height=86)
-        header.pack(fill="x", padx=32, pady=(20, 6))
+        header = tk.Frame(self.main, bg=c["bg"], height=98)
+        header.pack(fill="x", padx=40, pady=(22, 0))
         header.pack_propagate(False)
         title_box = tk.Frame(header, bg=c["bg"])
-        title_box.pack(side="left", fill="y")
+        title_box.pack(side="left", fill="y", pady=(6, 0))
         tk.Label(
             title_box,
             text="Good to see you.",
             bg=c["bg"],
             fg=c["text"],
-            font=("Segoe UI", 22, "bold"),
+            font=("Segoe UI", 25, "bold"),
         ).pack(anchor="w")
         tk.Label(
             title_box,
             text="What can ACCESS help you accomplish?",
             bg=c["bg"],
             fg=c["muted"],
-            font=("Segoe UI", 10),
-        ).pack(anchor="w", pady=(4, 0))
+            font=("Segoe UI", 12),
+        ).pack(anchor="w", pady=(8, 0))
 
-        status = tk.Frame(header, bg=c["surface"], highlightthickness=1, highlightbackground=c["border"])
-        status.pack(side="right", pady=4)
-        tk.Label(status, text="●", bg=c["surface"], fg=c["success"], font=("Segoe UI", 11)).pack(side="left", padx=(14, 6), pady=10)
-        tk.Label(status, text="SYSTEM ONLINE", bg=c["surface"], fg=c["text"], font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 14))
+        status_panel = RoundedPanel(
+            header,
+            c["surface"],
+            c["border"],
+            radius=14,
+            width=166,
+            height=48,
+        )
+        status_panel.pack(side="right", pady=(5, 0))
+        status = status_panel.body
+        tk.Label(status, text="●", bg=c["surface"], fg=c["success"], font=("Segoe UI", 11)).pack(side="left", padx=(18, 9), pady=12)
+        tk.Label(status, text="System Online", bg=c["surface"], fg=c["text"], font=("Segoe UI", 10)).pack(side="left", padx=(0, 16))
 
         cards = tk.Frame(self.main, bg=c["bg"])
-        cards.pack(fill="x", padx=32, pady=(0, 14))
-        self._status_card(cards, "ENGINE", "Ready", c["success"])
-        self._status_card(cards, "MODE", "Offline-first", c["accent"])
+        cards.pack(fill="x", padx=40, pady=(0, 22))
+        self._status_card(cards, "\ue950", "ENGINE", "Ready", c["accent"])
+        self._status_card(cards, "\ue701", "MODE", "Offline-first", c["accent"])
         system_name = platform.system() or os.name
-        self._status_card(cards, "PLATFORM", system_name, c["blue"])
+        platform_icon = "\ue782" if system_name == "Windows" else ("\ue711" if system_name == "Darwin" else "\ue7f8")
+        self._status_card(cards, platform_icon, "PLATFORM", system_name, c["blue"])
 
-        chat_outer = tk.Frame(self.main, bg=c["surface"], highlightthickness=1, highlightbackground=c["border"])
-        chat_outer.pack(fill="both", expand=True, padx=32, pady=(0, 14))
+        chat_panel = RoundedPanel(self.main, c["surface"], c["border"], radius=15)
+        chat_panel.pack(fill="both", expand=True, padx=40, pady=(0, 20))
+        chat_outer = chat_panel.body
         chat_title = tk.Frame(chat_outer, bg=c["surface"])
-        chat_title.pack(fill="x", padx=18, pady=(14, 8))
-        tk.Label(chat_title, text="Conversation", bg=c["surface"], fg=c["text"], font=("Segoe UI", 11, "bold")).pack(side="left")
-        self.activity_label = tk.Label(chat_title, text="Ready", bg=c["surface"], fg=c["muted"], font=("Segoe UI", 9))
+        chat_title.pack(fill="x", padx=24, pady=(14, 7))
+        tk.Label(chat_title, text="Conversation", bg=c["surface"], fg=c["text"], font=("Segoe UI", 14, "bold")).pack(side="left")
+        tk.Label(chat_title, text="⋮", bg=c["surface"], fg=c["muted"], font=("Segoe UI", 18)).pack(side="right", padx=(16, 0))
+        self.activity_label = tk.Label(chat_title, text="Ready", bg=c["surface"], fg=c["muted"], font=("Segoe UI", 10))
         self.activity_label.pack(side="right")
 
         chat_body = tk.Frame(chat_outer, bg=c["surface"])
-        chat_body.pack(fill="both", expand=True, padx=(12, 4), pady=(0, 10))
+        chat_body.pack(fill="both", expand=True, padx=(10, 8), pady=(0, 14))
         self.chat_canvas = tk.Canvas(chat_body, bg=c["surface"], bd=0, highlightthickness=0)
         scrollbar = ttk.Scrollbar(chat_body, orient="vertical", command=self.chat_canvas.yview, style="Access.Vertical.TScrollbar")
         self.chat_canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
+        # Keep scrolling available while matching the reference's clean edge.
         self.chat_canvas.pack(side="left", fill="both", expand=True)
         self.chat_frame = tk.Frame(self.chat_canvas, bg=c["surface"])
         self.chat_window = self.chat_canvas.create_window((0, 0), window=self.chat_frame, anchor="nw")
@@ -860,8 +1053,15 @@ class AccessGUI:
         self._small_button(self.confirmation_bar, "Cancel", lambda: self.submit_command("no"), c["surface"]).pack(side="right", padx=(4, 12), pady=7)
         self._small_button(self.confirmation_bar, "Confirm", lambda: self.submit_command("yes"), c["danger"]).pack(side="right", padx=4, pady=7)
 
-        composer = tk.Frame(self.main, bg=c["input"], highlightthickness=1, highlightbackground=c["border"])
-        composer.pack(fill="x", padx=32, pady=(0, 24))
+        composer_panel = RoundedPanel(
+            self.main,
+            c["input"],
+            c["border"],
+            radius=15,
+            height=80,
+        )
+        composer_panel.pack(fill="x", padx=40, pady=(0, 40))
+        composer = composer_panel.body
         self.command_entry = tk.Entry(
             composer,
             relief="flat",
@@ -869,39 +1069,57 @@ class AccessGUI:
             bg=c["input"],
             fg=c["text"],
             insertbackground=c["accent"],
-            font=("Segoe UI", 11),
+            font=("Segoe UI", 12),
         )
-        self.command_entry.pack(side="left", fill="both", expand=True, padx=16, pady=15)
-        self.command_entry.insert(0, "Ask ACCESS or enter a command...")
+        self.command_entry.pack(side="left", fill="both", expand=True, padx=26, pady=22)
+        self.command_entry.insert(0, "Type your message...")
         self.command_entry.configure(fg=c["muted"])
         self.command_entry.bind("<FocusIn>", self._clear_placeholder)
         self.command_entry.bind("<FocusOut>", self._restore_placeholder)
         self.send_button = tk.Button(
             composer,
-            text="Send  ➜",
+            text="Send  →",
             command=self.submit_from_entry,
             relief="flat",
             bd=0,
-            padx=18,
-            pady=9,
+            padx=28,
+            pady=14,
             bg=c["accent"],
             activebackground=c["accent_hover"],
             fg="#06110F",
             activeforeground="#06110F",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 12, "bold"),
             cursor="hand2",
         )
-        self.send_button.pack(side="right", padx=7, pady=7)
+        self.send_button.pack(side="right", padx=18, pady=14)
 
-    def _status_card(self, parent: tk.Widget, label: str, value: str, color: str) -> None:
+    def _status_card(self, parent: tk.Widget, icon: str, label: str, value: str, color: str) -> None:
         c = self.colors
-        card = tk.Frame(parent, bg=c["surface"], highlightthickness=1, highlightbackground=c["border"])
-        card.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        tk.Frame(card, width=3, bg=color).pack(side="left", fill="y")
+        panel = RoundedPanel(parent, c["surface"], c["border"], radius=14, height=84)
+        panel.pack(side="left", fill="x", expand=True, padx=(0, 14))
+        card = panel.body
+        tk.Frame(card, width=4, bg=color).pack(side="left", fill="y")
+        shown_icon = icon if self.has_fluent_icons else FALLBACK_ACTION_ICONS.get(label.casefold(), "◉")
+        if label == "PLATFORM" and value == "Windows":
+            logo = tk.Canvas(card, width=52, height=44, bg=c["surface"], bd=0, highlightthickness=0)
+            logo.create_rectangle(8, 5, 25, 20, fill=color, outline=color)
+            logo.create_rectangle(28, 5, 45, 20, fill=color, outline=color)
+            logo.create_rectangle(8, 23, 25, 38, fill=color, outline=color)
+            logo.create_rectangle(28, 23, 45, 38, fill=color, outline=color)
+            logo.pack(side="left", padx=(18, 10))
+        else:
+            tk.Label(
+                card,
+                text=shown_icon,
+                width=3,
+                bg=c["surface"],
+                fg=color,
+                font=(self.icon_font_family, 24),
+            ).pack(side="left", padx=(18, 10))
         body = tk.Frame(card, bg=c["surface"])
-        body.pack(side="left", padx=14, pady=10)
-        tk.Label(body, text=label, bg=c["surface"], fg=c["muted"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
-        tk.Label(body, text=value, bg=c["surface"], fg=c["text"], font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(2, 0))
+        body.pack(side="left", pady=15)
+        tk.Label(body, text=label, bg=c["surface"], fg=c["muted"], font=("Segoe UI", 9)).pack(anchor="w")
+        tk.Label(body, text=value, bg=c["surface"], fg=c["text"], font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(5, 0))
 
     def _small_button(self, parent: tk.Widget, text: str, command: Callable, bg: str) -> tk.Button:
         return tk.Button(parent, text=text, command=command, relief="flat", bd=0, padx=12, pady=5, bg=bg, activebackground=bg, fg=self.colors["text"], activeforeground=self.colors["text"], font=("Segoe UI", 9, "bold"), cursor="hand2")
@@ -917,7 +1135,7 @@ class AccessGUI:
 
     def submit_from_entry(self) -> None:
         command = self.command_entry.get().strip()
-        if command == "Ask ACCESS or enter a command...":
+        if command == "Type your message...":
             return
         self.command_entry.delete(0, "end")
         self.submit_command(command)
@@ -1001,17 +1219,34 @@ class AccessGUI:
     def _add_message(self, text: str, sender: str, context: str = "") -> None:
         c = self.colors
         row = tk.Frame(self.chat_frame, bg=c["surface"])
-        row.pack(fill="x", padx=12, pady=7)
+        row.pack(fill="x", padx=6, pady=9)
         self._chat_rows.append(row)
         is_user = sender == "user"
-        bubble = tk.Frame(row, bg=c["user"] if is_user else c["surface_2"], padx=14, pady=10)
-        bubble.pack(side="right" if is_user else "left", padx=(100, 4) if is_user else (4, 100))
+        bubble_bg = c["user"] if is_user else c["surface_2"]
+        if is_user:
+            avatar = self._message_avatar(row, "U", c["blue"])
+            avatar.pack(side="right", padx=(10, 4), anchor="n")
+        else:
+            avatar = self._message_avatar(row, "A", c["accent"])
+            avatar.pack(side="left", padx=(2, 14), anchor="n")
+        bubble = tk.Frame(
+            row,
+            bg=bubble_bg,
+            padx=20,
+            pady=14,
+            highlightthickness=1,
+            highlightbackground=c["border"] if not is_user else c["user"],
+        )
+        bubble.pack(
+            side="right" if is_user else "left",
+            padx=(160, 0) if is_user else (0, 160),
+        )
         tk.Label(
             bubble,
             text="YOU" if is_user else "ACCESS",
             bg=bubble["bg"],
             fg="#DCE8FF" if is_user else c["accent"],
-            font=("Segoe UI", 8, "bold"),
+            font=("Segoe UI", 9, "bold"),
         ).pack(anchor="w")
         screenshot_path = None if is_user else self._screenshot_path(str(text), context)
         highlighted = None if is_user or screenshot_path else highlight_code(str(text), context)
@@ -1034,20 +1269,26 @@ class AccessGUI:
                 text=str(text),
                 justify="left",
                 anchor="w",
-                wraplength=620,
+                wraplength=690 if self.theme_name == "light" else 480,
                 bg=bubble["bg"],
                 fg="#FFFFFF" if is_user else c["text"],
-                font=("Segoe UI", 10),
+                font=("Segoe UI", 12),
             )
-            label.pack(anchor="w", pady=(4, 0))
+            label.pack(anchor="w", pady=(8, 0))
         tk.Label(
             bubble,
             text=datetime.now().strftime("%H:%M"),
             bg=bubble["bg"],
             fg="#C6D4F3" if is_user else c["muted"],
-            font=("Segoe UI", 7),
-        ).pack(anchor="e", pady=(5, 0))
+            font=("Segoe UI", 8),
+        ).pack(anchor="e", pady=(8, 0))
         self.root.after_idle(self._scroll_to_bottom)
+
+    def _message_avatar(self, parent: tk.Widget, letter: str, color: str) -> tk.Canvas:
+        canvas = tk.Canvas(parent, width=46, height=46, bg=self.colors["surface"], bd=0, highlightthickness=0)
+        canvas.create_oval(2, 2, 44, 44, fill=color, outline=color)
+        canvas.create_text(23, 23, text=letter, fill="#FFFFFF", font=("Segoe UI", 16, "bold"))
+        return canvas
 
     @staticmethod
     def _screenshot_path(response: str, context: str = "") -> Path | None:
@@ -1414,15 +1655,13 @@ class AccessGUI:
     def toggle_theme(self) -> None:
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
         # Rebuilding is safer than recursively recoloring widgets with mixed roles.
-        for child in self.shell.winfo_children():
-            child.destroy()
+        self.app_container.destroy()
         self.colors = THEMES[self.theme_name]
         self.root.configure(bg=self.colors["bg"])
         self._chat_rows.clear()
         self._image_refs.clear()
         self._configure_styles()
-        self._build_sidebar()
-        self._build_main()
+        self._build_layout()
         self._add_welcome_message()
         self.command_entry.focus_set()
 
@@ -1431,13 +1670,13 @@ class AccessGUI:
             self.confirmation_bar.pack_forget()
 
     def _clear_placeholder(self, _event=None) -> None:
-        if self.command_entry.get() == "Ask ACCESS or enter a command...":
+        if self.command_entry.get() == "Type your message...":
             self.command_entry.delete(0, "end")
             self.command_entry.configure(fg=self.colors["text"])
 
     def _restore_placeholder(self, _event=None) -> None:
         if not self.command_entry.get():
-            self.command_entry.insert(0, "Ask ACCESS or enter a command...")
+            self.command_entry.insert(0, "Type your message...")
             self.command_entry.configure(fg=self.colors["muted"])
 
     def _update_scroll_region(self, _event=None) -> None:
