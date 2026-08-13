@@ -6,7 +6,6 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
-from ai.decision_engine import AIDecisionEngine
 from ai.local_llm import LocalLLM
 from core.router import IntentRouter
 from memory.database import MemoryDatabase
@@ -46,8 +45,6 @@ class AccessEngine:
 
         self.router = IntentRouter()
 
-        self.ai = AIDecisionEngine()
-
         self.local_llm = LocalLLM()
 
         self.system = SystemControl()
@@ -81,228 +78,208 @@ class AccessEngine:
 
     def process(self, user_input: str) -> str:
         """
-        Process a user command.
+        Main ACCESS pipeline.
 
-        Priority:
-
-            User Input
-                 ↓
-            Confirmation
-                 ↓
-            Deterministic Router
-                 ↓
-            AI Decision Engine
-                 ↓
-            Local LLM
-                 ↓
-            Permission / Unknown
+        IMPORTANT:
+        1. Explicit desktop commands are handled deterministically.
+        2. If one or more commands are present, they are executed.
+        3. If there is no command, the message goes directly to the local
+           Ollama model as normal conversation.
+        4. The AI decision engine is intentionally NOT used as a gate for
+           ordinary conversation. A small command model should never decide
+           whether a normal sentence is "allowed" to be conversation.
         """
 
         command = (user_input or "").strip()
 
-        # ----------------------------------------------------
-        # EMPTY COMMAND
-        # ----------------------------------------------------
-
         if not command:
-            return "Please enter a command."
+            return "Please enter a message."
 
         # ----------------------------------------------------
         # PENDING CONFIRMATION
         # ----------------------------------------------------
 
         if self.pending_action is not None:
-
-            response = self._handle_confirmation(
-                command
-            )
-
-            self._save_memory(
-                command,
-                response,
-            )
-
+            response = self._handle_confirmation(command)
+            self._save_memory(command, response)
             return response
 
-        # ====================================================
-        # DETERMINISTIC ROUTER FIRST
-        # ====================================================
+        # ----------------------------------------------------
+        # DETERMINISTIC COMMAND ROUTING
+        # ----------------------------------------------------
 
-        # Known commands MUST be handled here before AI.
-        #
-        # This prevents the AI from incorrectly interpreting:
-        #
-        # "turn on darkmode"
-        #
-        # as another command such as lock_screen.
+        intents = self.router.route_all(command)
 
-        intent = self.router.route(command)
+        executable_intents = [
+            intent for intent in intents
+            if intent.name not in {"unknown", "empty"}
+        ]
 
-        if intent.name != "unknown":
+        if executable_intents:
+            results = []
 
-            response = self._execute_intent(
-                intent.name,
-                intent.target,
-            )
+            for intent in executable_intents:
+                result = self._execute_intent(
+                    intent.name,
+                    intent.target,
+                )
+                results.append(result)
 
-            self._save_memory(
-                command,
-                response,
-            )
+                # A dangerous action pauses execution for confirmation.
+                if self.pending_action is not None:
+                    break
 
+                if not self.running:
+                    break
+
+            response = "\n".join(results)
+
+            self._save_memory(command, response)
             return response
 
-        # ====================================================
-        # AI INTERPRETATION
-        # ====================================================
+        # ----------------------------------------------------
+        # NORMAL CONVERSATION
+        # ----------------------------------------------------
 
-        recent_memory = self.get_recent_memory(5)
-
-        try:
-
-            ai_result = self.ai.interpret(
-                command,
-                recent_memory=recent_memory,
-            )
-
-        except Exception:
-
-            # AI failure must never destroy
-            # deterministic functionality.
-
-            ai_result = None
-
-        # ====================================================
-        # AI RESULT
-        # ====================================================
-
-        if ai_result is not None:
-
-            # ------------------------------------------------
-            # MULTI-STEP PLAN
-            # ------------------------------------------------
-
-            if (
-                ai_result.intent == "multi_step_plan"
-                and ai_result.steps
-                and ai_result.confidence
-                >= self.ai.CONFIDENCE_THRESHOLD
-            ):
-
-                response = self._execute_plan(
-                    ai_result.steps
-                )
-
-                self._save_memory(
-                    command,
-                    response,
-                )
-
-                return response
-
-            # ------------------------------------------------
-            # SINGLE AI INTENT
-            # ------------------------------------------------
-
-            if (
-                ai_result.intent
-                and ai_result.intent != "unknown"
-                and ai_result.confidence
-                >= self.ai.CONFIDENCE_THRESHOLD
-            ):
-
-                response = self._execute_intent(
-                    ai_result.intent,
-                    ai_result.target,
-                )
-
-                self._save_memory(
-                    command,
-                    response,
-                )
-
-                return response
-
-        # ====================================================
-        # LOCAL LLM FALLBACK
-        # ====================================================
-
-        try:
-
-            if self.local_llm.is_available():
-
-                local_result = (
-                    self.local_llm.interpret(command)
-                )
-
-                local_intent = local_result.get(
-                    "intent",
-                    "unknown",
-                )
-
-                local_target = local_result.get(
-                    "target",
-                    "",
-                )
-
-                local_response = local_result.get(
-                    "response",
-                    "",
-                )
-
-                # --------------------------------------------
-                # NORMAL CONVERSATION
-                # --------------------------------------------
-
-                if local_intent == "conversation":
-
-                    response = (
-                        local_response
-                        or "I'm here to help."
-                    )
-
-                    self._save_memory(
-                        command,
-                        response,
-                    )
-
-                    return response
-
-                # --------------------------------------------
-                # LOCAL LLM SYSTEM INTENT
-                # --------------------------------------------
-
-                if local_intent != "unknown":
-
-                    response = self._execute_intent(
-                        local_intent,
-                        local_target,
-                    )
-
-                    self._save_memory(
-                        command,
-                        response,
-                    )
-
-                    return response
-
-        except Exception:
-            pass
-
-        # ====================================================
-        # FINAL PERMISSION RESPONSE
-        # ====================================================
-
-        response = (
-            "I don't have permission to do this."
-        )
-
-        self._save_memory(
-            command,
-            response,
-        )
-
+        response = self._chat_with_llm(command)
+        self._save_memory(command, response)
         return response
+
+    # ========================================================
+    # NORMAL CHAT
+    # ========================================================
+
+    def _chat_with_llm(self, user_input: str) -> str:
+        """
+        Send a non-command message to the local Ollama model.
+
+        Supports common LocalLLM interfaces:
+        - chat(...)
+        - generate(...)
+        - ask(...)
+        - interpret(...) returning {"response": ...}
+
+        The first three are preferred because they are true chat/generation
+        interfaces and do not force the model into an intent-classification
+        task.
+        """
+
+        try:
+            recent = self.get_recent_memory(8)
+
+            # Preferred: a real chat method.
+            chat_method = getattr(self.local_llm, "chat", None)
+            if callable(chat_method):
+                try:
+                    return self._normalize_llm_response(
+                        chat_method(
+                            user_input,
+                            recent_memory=recent,
+                        )
+                    )
+                except TypeError:
+                    return self._normalize_llm_response(
+                        chat_method(user_input)
+                    )
+
+            # Alternative common interface.
+            generate_method = getattr(self.local_llm, "generate", None)
+            if callable(generate_method):
+                try:
+                    return self._normalize_llm_response(
+                        generate_method(
+                            user_input,
+                            recent_memory=recent,
+                        )
+                    )
+                except TypeError:
+                    return self._normalize_llm_response(
+                        generate_method(user_input)
+                    )
+
+            ask_method = getattr(self.local_llm, "ask", None)
+            if callable(ask_method):
+                try:
+                    return self._normalize_llm_response(
+                        ask_method(
+                            user_input,
+                            recent_memory=recent,
+                        )
+                    )
+                except TypeError:
+                    return self._normalize_llm_response(
+                        ask_method(user_input)
+                    )
+
+            # Backward compatibility with the LocalLLM implementation that
+            # exposes only interpret(). If it returns a conversation response,
+            # use that response; NEVER execute an AI-generated system intent
+            # here. System commands are already handled by the deterministic
+            # router above.
+            interpret_method = getattr(self.local_llm, "interpret", None)
+            if callable(interpret_method):
+                result = interpret_method(user_input)
+
+                if isinstance(result, dict):
+                    response = (
+                        result.get("response")
+                        or result.get("text")
+                        or result.get("content")
+                        or ""
+                    )
+                    if response:
+                        return str(response).strip()
+
+                return self._normalize_llm_response(result)
+
+            return (
+                "I couldn't connect to the local language model. "
+                "Please check that Ollama is running."
+            )
+
+        except Exception as error:
+            return (
+                "I couldn't generate a response from the local model. "
+                f"Please check Ollama. ({error})"
+            )
+
+    @staticmethod
+    def _normalize_llm_response(result) -> str:
+        """Convert common Ollama/LocalLLM return shapes to plain text."""
+
+        if result is None:
+            return "I didn't get a response from the local model."
+
+        if isinstance(result, str):
+            text = result.strip()
+            return text or "I didn't get a response from the local model."
+
+        if isinstance(result, dict):
+            for key in ("response", "text", "content", "message"):
+                value = result.get(key)
+                if isinstance(value, dict):
+                    value = value.get("content") or value.get("text")
+                if value:
+                    return str(value).strip()
+
+        # Ollama-style response object support.
+        response_attr = getattr(result, "response", None)
+        if response_attr:
+            return str(response_attr).strip()
+
+        message_attr = getattr(result, "message", None)
+        if message_attr:
+            if isinstance(message_attr, dict):
+                return str(
+                    message_attr.get("content")
+                    or message_attr.get("text")
+                    or message_attr
+                ).strip()
+            content = getattr(message_attr, "content", None)
+            if content:
+                return str(content).strip()
+
+        return str(result).strip()
 
     # ========================================================
     # INTENT EXECUTION
