@@ -1,29 +1,71 @@
+<<<<<<< HEAD
+import argparse
 import os
+
+=======
+import platform
 
 from dotenv import load_dotenv
 from rich.align import Align
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+>>>>>>> modification
 from core.engine import AccessEngine
+
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ModuleNotFoundError:
+    # The native GUI and offline command engine do not require dotenv.
+    pass
 
 APP_NAME = "ACCESS"
+
 APP_FULL_NAME = (
-    "Adaptive Cognitive Companion for Efficient System Services"
+    "Adaptive Cognitive Companion for Efficient System Services\n"
 )
+
+APP_DESCRIPTION = "Intelligent Desktop Assistant"
 
 VERSION = "1.0"
 MODE = "OFFLINE-FIRST"
 
-console = Console()
+console = None
+
+
+def _load_terminal_ui():
+    """Load Rich only when the classic terminal interface is requested."""
+
+    global Align, Console, Panel, Table, Text, console
+    if console is not None:
+        return
+    try:
+        from rich.align import Align as RichAlign
+        from rich.console import Console as RichConsole
+        from rich.panel import Panel as RichPanel
+        from rich.table import Table as RichTable
+        from rich.text import Text as RichText
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "Terminal mode requires Rich. Run: pip install -r requirements.txt"
+        ) from error
+
+    Align = RichAlign
+    Console = RichConsole
+    Panel = RichPanel
+    Table = RichTable
+    Text = RichText
+    console = Console()
+
 
 # ============================================================
 # BANNER
@@ -32,49 +74,59 @@ console = Console()
 def show_banner():
     """Display the main ACCESS banner."""
 
-    banner = Text()
+    # --------------------------------------------------------
+    # ACCESS ASCII LOGO
+    # --------------------------------------------------------
 
-    banner.append(
-        " █████╗  ██████╗ ██████╗███████╗███████╗███████╗\n",
+    logo = Text(
+        "\n".join(
+            [
+                " █████╗  ██████╗ ██████╗███████╗███████╗███████╗",
+                "██╔══██╗██╔════╝██╔════╝██╔════╝██╔════╝██╔════╝",
+                "███████║██║     ██║     █████╗  ███████╗███████╗",
+                "██╔══██║██║     ██║     ██╔══╝  ╚════██║╚════██║",
+                "██║  ██║╚██████╗╚██████╗███████╗███████║███████║",
+                "╚═╝  ╚═╝ ╚═════╝╚═════╝╚══════╝╚══════╝╚══════╝",
+            ]
+        ),
         style="bold cyan",
-    )
-    banner.append(
-        "██╔══██╗██╔════╝██╔════╝██╔════╝██╔════╝██╔════╝\n",
-        style="bold cyan",
-    )
-    banner.append(
-        "███████║██║     ██║     █████╗  ███████╗███████╗\n",
-        style="bold cyan",
-    )
-    banner.append(
-        "██╔══██║██║     ██║     ██╔══╝  ╚════██║╚════██║\n",
-        style="bold cyan",
-    )
-    banner.append(
-        "██║  ██║╚██████╗╚██████╗███████╗███████║███████║\n",
-        style="bold cyan",
-    )
-    banner.append(
-        "╚═╝  ╚═╝ ╚═════╝╚═════╝╚══════╝╚══════╝╚══════╝",
-        style="bold cyan",
+        justify="center",
     )
 
-    subtitle = Text()
+    # --------------------------------------------------------
+    # PROJECT NAME
+    # --------------------------------------------------------
 
-    subtitle.append(
-        "\n\nAdaptive Cognitive Companion for Efficient System Services",
+    full_name = Text(
+        APP_FULL_NAME,
         style="bold white",
+        justify="center",
     )
 
-    subtitle.append(
-        "\n\nIntelligent Desktop Assistant",
+    # --------------------------------------------------------
+    # DESCRIPTION
+    # --------------------------------------------------------
+
+    description = Text(
+        APP_DESCRIPTION,
         style="dim",
+        justify="center",
     )
 
-    content = Text.assemble(
-        banner,
-        subtitle
+    # --------------------------------------------------------
+    # GROUP
+    # --------------------------------------------------------
+
+    content = Group(
+        Align.center(logo),
+        Text(""),
+        Align.center(full_name),
+        Align.center(description),
     )
+
+    # --------------------------------------------------------
+    # PANEL
+    # --------------------------------------------------------
 
     console.print(
         Panel(
@@ -83,6 +135,7 @@ def show_banner():
             padding=(1, 2),
         )
     )
+
 
 # ============================================================
 # SYSTEM STATUS
@@ -93,47 +146,90 @@ def show_system_status(engine):
 
     table = Table(
         show_header=False,
+        show_edge=False,
         box=None,
-        padding=(0, 2),
+        padding=(0, 1),
+        expand=False,
     )
 
+    # --------------------------------------------------------
+    # COLUMNS
+    # --------------------------------------------------------
+
+    table.add_column(
+        "Component",
+        style="bold cyan",
+        no_wrap=True,
+        justify="left",
+    )
+
+    table.add_column(
+        "Separator",
+        style="dim",
+        no_wrap=True,
+        justify="center",
+    )
+
+    table.add_column(
+        "Status",
+        no_wrap=True,
+        justify="left",
+    )
+
+    # --------------------------------------------------------
+    # STATUS ROWS
+    # --------------------------------------------------------
+
     table.add_row(
-        "[bold cyan]SYSTEM[/bold cyan]",
+        "SYSTEM",
+        "│",
         "[green]● ONLINE[/green]",
     )
 
     table.add_row(
-        "[bold cyan]ENGINE[/bold cyan]",
+        "ENGINE",
+        "│",
         "[green]● READY[/green]",
     )
 
     table.add_row(
-        "[bold cyan]ROUTER[/bold cyan]",
+        "ROUTER",
+        "│",
         "[green]● READY[/green]",
     )
 
     table.add_row(
-        "[bold cyan]MODE[/bold cyan]",
+        "MODE",
+        "│",
         f"[yellow]{MODE}[/yellow]",
     )
 
     table.add_row(
-        "[bold cyan]PLATFORM[/bold cyan]",
-        os.name if os.name != "posix" else __import__("platform").system(),
+        "PLATFORM",
+        "│",
+        platform.system(),
     )
 
     table.add_row(
-        "[bold cyan]VERSION[/bold cyan]",
+        "VERSION",
+        "│",
         VERSION,
     )
+
+    # --------------------------------------------------------
+    # STATUS PANEL
+    # --------------------------------------------------------
 
     console.print(
         Panel(
             table,
             title="[bold cyan]ACCESS STATUS[/bold cyan]",
+            title_align="center",
             border_style="blue",
+            padding=(1, 2),
         )
     )
+
 
 # ============================================================
 # HELP
@@ -144,16 +240,19 @@ def show_help():
 
     table = Table(
         title="ACCESS Commands",
+        title_style="bold cyan",
         border_style="cyan",
+        padding=(0, 1),
     )
 
     table.add_column(
         "Command",
-        style="bold cyan"
+        style="bold cyan",
+        no_wrap=True,
     )
 
     table.add_column(
-        "Description"
+        "Description",
     )
 
     commands = [
@@ -162,9 +261,23 @@ def show_help():
         ("about", "Show project information"),
         ("clear", "Clear the terminal"),
         ("exit", "Close ACCESS"),
+
+        ("who are you", "Identify ACCESS"),
         ("open chrome", "Open an application"),
         ("close chrome", "Close an application"),
+
         ("screenshot", "Capture the screen"),
+
+        ("brightness up", "Increase screen brightness"),
+        ("brightness down", "Decrease screen brightness"),
+
+        ("volume up", "Increase system volume"),
+        ("volume down", "Decrease system volume"),
+        ("mute", "Mute system audio"),
+
+        ("turn on dark mode", "Enable dark mode"),
+        ("turn on white mode", "Enable light mode"),
+
         ("create file NAME", "Create a file"),
         ("read file PATH", "Read a file"),
         ("search file NAME", "Search for a file"),
@@ -177,10 +290,14 @@ def show_help():
     for command, description in commands:
         table.add_row(
             command,
-            description
+            description,
         )
 
-    console.print(table)
+    console.print()
+    console.print(
+        Align.center(table)
+    )
+
 
 # ============================================================
 # ABOUT
@@ -189,46 +306,65 @@ def show_help():
 def show_about():
     """Display project information."""
 
-    info = Text()
-
-    info.append(
-        "ACCESS\n",
+    title = Text(
+        APP_NAME,
         style="bold cyan",
+        justify="center",
     )
 
-    info.append(
-        "Adaptive Cognitive Companion for Efficient System Services\n\n",
+    full_name = Text(
+        APP_FULL_NAME,
         style="bold white",
+        justify="center",
     )
 
-    info.append(
-        "Hybrid Offline + Online AI Desktop Assistant\n",
+    description = Text(
+        "Hybrid Offline + Online AI Desktop Assistant",
         style="green",
+        justify="center",
     )
 
-    info.append(
+    features = Text(
         "Cross-platform • Privacy-first • Modular • Extensible",
         style="dim",
+        justify="center",
+    )
+
+    content = Group(
+        Align.center(title),
+        Align.center(full_name),
+        Text(""),
+        Align.center(description),
+        Align.center(features),
     )
 
     console.print(
         Panel(
-            Align.center(info),
+            Align.center(content),
             title="ABOUT",
+            title_align="center",
             border_style="cyan",
+            padding=(1, 2),
         )
     )
 
+
 # ============================================================
-# MAIN APPLICATION
+# START ACCESS
 # ============================================================
 
 def start_access():
     """Start ACCESS."""
 
+    _load_terminal_ui()
+
     engine = AccessEngine()
 
     console.clear()
+
+    # --------------------------------------------------------
+    # INITIAL INTERFACE
+    # --------------------------------------------------------
 
     show_banner()
 
@@ -239,10 +375,20 @@ def start_access():
     console.print()
 
     console.print(
-        "[dim]Type 'help' to see available commands.[/dim]"
+        Align.center(
+            Text.assemble(
+                ("Type ", "dim"),
+                ("'help'", "green"),
+                (" to see available commands.", "dim"),
+            )
+        )
     )
 
     console.print()
+
+    # --------------------------------------------------------
+    # MAIN LOOP
+    # --------------------------------------------------------
 
     while engine.running:
 
@@ -260,45 +406,114 @@ def start_access():
 
             break
 
+        # ----------------------------------------------------
+        # EMPTY INPUT
+        # ----------------------------------------------------
+
         if not command:
             continue
 
-        command_lower = command.lower()
+        command_lower = command.lower().strip()
 
-        # UI-only commands
+        # ----------------------------------------------------
+        # UI COMMANDS
+        # ----------------------------------------------------
+
         if command_lower == "help":
+            console.print()
             show_help()
-            continue
-
-        if command_lower == "status":
-            show_system_status(engine)
-            continue
-
-        if command_lower == "about":
-            show_about()
-            continue
-
-        if command_lower == "clear":
-            console.clear()
-            show_banner()
             console.print()
             continue
 
-        # Everything else goes to the engine
+        if command_lower == "status":
+            console.print()
+            show_system_status(engine)
+            console.print()
+            continue
+
+        if command_lower == "about":
+            console.print()
+            show_about()
+            console.print()
+            continue
+
+        # ----------------------------------------------------
+        # CLEAR
+        # ----------------------------------------------------
+
+        if command_lower == "clear":
+
+            console.clear()
+
+            show_banner()
+
+            console.print()
+
+            show_system_status(engine)
+
+            console.print()
+
+            console.print(
+                Align.center(
+                    Text.assemble(
+                        ("Type ", "dim"),
+                        ("'help'", "green"),
+                        (
+                            " to see available commands.",
+                            "dim",
+                        ),
+                    )
+                )
+            )
+
+            console.print()
+
+            continue
+
+        # ----------------------------------------------------
+        # ENGINE COMMAND
+        # ----------------------------------------------------
+
         response = engine.process(command)
+
+        console.print()
 
         console.print(
             f"[cyan]ACCESS:[/cyan] {response}"
         )
+
+        console.print()
+
 
 # ============================================================
 # ENTRY POINT
 # ============================================================
 
 def main():
-    """Application entry point."""
+    """Application entry point. The GUI is the default; ``--cli`` keeps the classic UI."""
 
-    start_access()
+    parser = argparse.ArgumentParser(description=APP_FULL_NAME)
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="run the classic terminal interface",
+    )
+    args = parser.parse_args()
+
+    if args.cli:
+        start_access()
+        return
+
+    try:
+        from ui.gui import start_gui
+
+        start_gui()
+    except (ImportError, __import__("tkinter").TclError) as error:
+        _load_terminal_ui()
+        console.print(
+            f"[yellow]GUI unavailable ({error}). Starting terminal mode.[/yellow]"
+        )
+        start_access()
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import os
 import platform
 import shutil
 import subprocess
+
 from pathlib import Path
 from datetime import datetime
 
@@ -12,46 +13,61 @@ from memory.database import MemoryDatabase
 from tools.system_tools import SystemControl
 
 
+# ============================================================
+# ACCESS ENGINE
+# ============================================================
+
 class AccessEngine:
     """
     Central execution engine for ACCESS.
 
     Responsibilities:
     - Receive user commands
-    - Interpret commands through AI
-    - Use deterministic router
-    - Fall back to Local LLM
-    - Execute single-step and multi-step tasks
-    - Handle dangerous-action confirmation
+    - Deterministic command routing
+    - AI interpretation for unknown commands
+    - Local LLM fallback
+    - Execute single-step tasks
+    - Execute multi-step tasks
+    - Handle confirmation
     - Handle screenshots
     - Handle file operations
     - Store interactions in local memory
     """
 
+    # ========================================================
+    # INITIALIZATION
+    # ========================================================
+
     def __init__(self):
-        # -------------------------------------------------
+
+        # ----------------------------------------------------
         # CORE COMPONENTS
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
         self.router = IntentRouter()
+
         self.ai = AIDecisionEngine()
+
         self.local_llm = LocalLLM()
+
         self.system = SystemControl()
+
         self.memory = MemoryDatabase()
 
         # Compatibility alias
         self.system_tools = self.system
 
-        # -------------------------------------------------
+        # ----------------------------------------------------
         # ENGINE STATE
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
         self.running = True
+
         self.pending_action = None
 
-        # -------------------------------------------------
+        # ----------------------------------------------------
         # CONFIRMATION ACTIONS
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
         self.confirmation_actions = {
             "shutdown",
@@ -59,122 +75,71 @@ class AccessEngine:
             "sleep",
         }
 
-    # =====================================================
+    # ========================================================
     # MAIN PROCESSOR
-    # =====================================================
+    # ========================================================
 
     def process(self, user_input: str) -> str:
         """
         Process a user command.
 
-        Flow:
+        Priority:
 
             User Input
                  ↓
             Confirmation
                  ↓
-            AI Decision Engine
-                 ↓
             Deterministic Router
                  ↓
-            Local LLM fallback
+            AI Decision Engine
                  ↓
-            Intent Execution
+            Local LLM
                  ↓
-            Memory
+            Permission / Unknown
         """
 
         command = (user_input or "").strip()
 
-        if not command:
-            response = "Please enter a command."
-            self._save_memory(command, response)
-            return response
+        # ----------------------------------------------------
+        # EMPTY COMMAND
+        # ----------------------------------------------------
 
-        # -------------------------------------------------
+        if not command:
+            return "Please enter a command."
+
+        # ----------------------------------------------------
         # PENDING CONFIRMATION
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
         if self.pending_action is not None:
-            response = self._handle_confirmation(command)
-            self._save_memory(command, response)
+
+            response = self._handle_confirmation(
+                command
+            )
+
+            self._save_memory(
+                command,
+                response,
+            )
+
             return response
 
-        # -------------------------------------------------
-        # AI DECISION ENGINE
-        # -------------------------------------------------
+        # ====================================================
+        # DETERMINISTIC ROUTER FIRST
+        # ====================================================
 
-        recent_memory = self.get_recent_memory(5)
-
-        try:
-            ai_result = self.ai.interpret(
-                command,
-                recent_memory=recent_memory,
-            )
-        except Exception:
-            # AI failure must never crash ACCESS.
-            ai_result = None
-
-        # -------------------------------------------------
-        # AI RESULT
-        # -------------------------------------------------
-
-        if ai_result is not None:
-
-            # ---------------------------------------------
-            # MULTI-STEP PLAN
-            # ---------------------------------------------
-
-            if (
-                ai_result.intent == "multi_step_plan"
-                and ai_result.steps
-                and ai_result.confidence
-                >= self.ai.CONFIDENCE_THRESHOLD
-            ):
-                response = self._execute_plan(
-                    ai_result.steps
-                )
-
-                self._save_memory(
-                    command,
-                    response,
-                )
-
-                return response
-
-            # ---------------------------------------------
-            # SINGLE AI INTENT
-            # ---------------------------------------------
-
-            if (
-                ai_result.intent
-                and ai_result.intent != "unknown"
-                and ai_result.confidence
-                >= self.ai.CONFIDENCE_THRESHOLD
-            ):
-                response = self._execute_intent(
-                    ai_result.intent,
-                    ai_result.target,
-                )
-
-                self._save_memory(
-                    command,
-                    response,
-                )
-
-                return response
-
-        # =================================================
-        # DETERMINISTIC ROUTER
-        # =================================================
+        # Known commands MUST be handled here before AI.
+        #
+        # This prevents the AI from incorrectly interpreting:
+        #
+        # "turn on darkmode"
+        #
+        # as another command such as lock_screen.
 
         intent = self.router.route(command)
 
-        # -------------------------------------------------
-        # Router successfully recognized command
-        # -------------------------------------------------
-
         if intent.name != "unknown":
+
             response = self._execute_intent(
                 intent.name,
                 intent.target,
@@ -187,19 +152,88 @@ class AccessEngine:
 
             return response
 
-        # =================================================
-        # LOCAL LLM FALLBACK
-        # =================================================
+        # ====================================================
+        # AI INTERPRETATION
+        # ====================================================
 
-        if self.local_llm.is_available():
+        recent_memory = self.get_recent_memory(5)
 
-            try:
-                local_result = self.local_llm.interpret(
-                    command
+        try:
+
+            ai_result = self.ai.interpret(
+                command,
+                recent_memory=recent_memory,
+            )
+
+        except Exception:
+
+            # AI failure must never destroy
+            # deterministic functionality.
+
+            ai_result = None
+
+        # ====================================================
+        # AI RESULT
+        # ====================================================
+
+        if ai_result is not None:
+
+            # ------------------------------------------------
+            # MULTI-STEP PLAN
+            # ------------------------------------------------
+
+            if (
+                ai_result.intent == "multi_step_plan"
+                and ai_result.steps
+                and ai_result.confidence
+                >= self.ai.CONFIDENCE_THRESHOLD
+            ):
+
+                response = self._execute_plan(
+                    ai_result.steps
                 )
 
-                if not isinstance(local_result, dict):
-                    local_result = {}
+                self._save_memory(
+                    command,
+                    response,
+                )
+
+                return response
+
+            # ------------------------------------------------
+            # SINGLE AI INTENT
+            # ------------------------------------------------
+
+            if (
+                ai_result.intent
+                and ai_result.intent != "unknown"
+                and ai_result.confidence
+                >= self.ai.CONFIDENCE_THRESHOLD
+            ):
+
+                response = self._execute_intent(
+                    ai_result.intent,
+                    ai_result.target,
+                )
+
+                self._save_memory(
+                    command,
+                    response,
+                )
+
+                return response
+
+        # ====================================================
+        # LOCAL LLM FALLBACK
+        # ====================================================
+
+        try:
+
+            if self.local_llm.is_available():
+
+                local_result = (
+                    self.local_llm.interpret(command)
+                )
 
                 local_intent = local_result.get(
                     "intent",
@@ -216,11 +250,12 @@ class AccessEngine:
                     "",
                 )
 
-                # -----------------------------------------
+                # --------------------------------------------
                 # NORMAL CONVERSATION
-                # -----------------------------------------
+                # --------------------------------------------
 
                 if local_intent == "conversation":
+
                     response = (
                         local_response
                         or "I'm here to help."
@@ -233,11 +268,12 @@ class AccessEngine:
 
                     return response
 
-                # -----------------------------------------
+                # --------------------------------------------
                 # LOCAL LLM SYSTEM INTENT
-                # -----------------------------------------
+                # --------------------------------------------
 
                 if local_intent != "unknown":
+
                     response = self._execute_intent(
                         local_intent,
                         local_target,
@@ -250,17 +286,15 @@ class AccessEngine:
 
                     return response
 
-            except Exception:
-                # Local LLM failure must never crash ACCESS.
-                pass
+        except Exception:
+            pass
 
-        # =================================================
-        # FINAL UNKNOWN
-        # =================================================
+        # ====================================================
+        # FINAL PERMISSION RESPONSE
+        # ====================================================
 
-        response = self._execute_intent(
-            intent.name,
-            intent.target,
+        response = (
+            "I don't have permission to do this."
         )
 
         self._save_memory(
@@ -270,18 +304,16 @@ class AccessEngine:
 
         return response
 
-    # =====================================================
+    # ========================================================
     # INTENT EXECUTION
-    # =====================================================
+    # ========================================================
 
     def _execute_intent(
         self,
         intent_name: str,
         target: str = "",
     ) -> str:
-        """
-        Execute one structured intent.
-        """
+        """Execute one structured intent."""
 
         intent_name = (
             intent_name or ""
@@ -289,49 +321,58 @@ class AccessEngine:
 
         target = target or ""
 
-        # -------------------------------------------------
+        # ----------------------------------------------------
         # EMPTY
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
         if intent_name == "empty":
             return "Please enter a command."
 
-        # -------------------------------------------------
+        # ----------------------------------------------------
         # UNKNOWN
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
         if intent_name == "unknown":
-            if target:
-                return (
-                    f"I don't know how to handle: "
-                    f"{target}"
-                )
-
             return (
-                "I don't know how to handle "
-                "that command."
+                "I don't have permission "
+                "to do this."
             )
 
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # ABOUT
+        # ----------------------------------------------------
+
+        if intent_name == "about":
+            return (
+                "I am ACCESS.\n"
+                "Adaptive Cognitive Companion "
+                "for Efficient System Services.\n"
+                "An Intelligent Desktop Assistant."
+            )
+
+        # ----------------------------------------------------
         # EXIT
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
         if intent_name == "exit":
+
             self.running = False
+
             return "Session terminated safely."
 
-        # -------------------------------------------------
+        # ----------------------------------------------------
         # DANGEROUS ACTIONS
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
         if intent_name in self.confirmation_actions:
+
             return self._request_confirmation(
                 intent_name
             )
 
-        # -------------------------------------------------
+        # ====================================================
         # SYSTEM CONTROL
-        # -------------------------------------------------
+        # ====================================================
 
         if intent_name == "lock_screen":
             return self.system.lock_screen()
@@ -351,87 +392,118 @@ class AccessEngine:
         if intent_name == "brightness_down":
             return self.system.brightness_down()
 
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # DARK MODE
+        # ----------------------------------------------------
+
+        if intent_name == "dark_mode":
+            return self.system.dark_mode()
+
+        # ----------------------------------------------------
+        # LIGHT MODE
+        # ----------------------------------------------------
+
+        if intent_name == "light_mode":
+            return self.system.light_mode()
+
+        # ====================================================
         # APPLICATION CONTROL
-        # -------------------------------------------------
+        # ====================================================
 
         if intent_name == "open_application":
+
             return self.system.open_application(
-                self._normalize_application(target)
+                self._normalize_application(
+                    target
+                )
             )
 
         if intent_name == "close_application":
+
             return self.system.close_application(
-                self._normalize_application(target)
+                self._normalize_application(
+                    target
+                )
             )
 
-        # -------------------------------------------------
+        # ====================================================
         # SCREENSHOT
-        # -------------------------------------------------
+        # ====================================================
 
         if intent_name == "screenshot":
             return self._handle_screenshot()
 
-        # -------------------------------------------------
+        # ====================================================
         # FILE OPERATIONS
-        # -------------------------------------------------
+        # ====================================================
 
         if intent_name == "create_file":
+
             return self._handle_file_operation(
                 "create",
                 target,
             )
 
         if intent_name == "read_file":
+
             return self._handle_file_operation(
                 "read",
                 target,
             )
 
         if intent_name == "delete_file":
+
             return self._handle_file_operation(
                 "delete",
                 target,
             )
 
         if intent_name == "search_file":
+
             return self._handle_file_operation(
                 "search",
                 target,
             )
 
         if intent_name == "copy_file":
+
             return self._handle_file_operation(
                 "copy",
                 target,
             )
 
         if intent_name == "move_file":
+
             return self._handle_file_operation(
                 "move",
                 target,
             )
 
         if intent_name == "rename_file":
+
             return self._handle_file_operation(
                 "rename",
                 target,
             )
 
+        # ----------------------------------------------------
+        # UNKNOWN INTENT
+        # ----------------------------------------------------
+
         return (
-            f"I don't know how to handle: "
-            f"{intent_name}"
+            "I don't have permission "
+            "to do this."
         )
 
-    # =====================================================
+    # ========================================================
     # APPLICATION NORMALIZATION
-    # =====================================================
+    # ========================================================
 
-    def _normalize_application(self, target):
-        """
-        Keep AI-generated application names compatible
-        with existing router aliases.
-        """
+    def _normalize_application(
+        self,
+        target,
+    ):
+        """Normalize AI/router application names."""
 
         if not target:
             return target
@@ -447,14 +519,15 @@ class AccessEngine:
             target,
         )
 
-    # =====================================================
+    # ========================================================
     # MULTI-STEP EXECUTION
-    # =====================================================
+    # ========================================================
 
-    def _execute_plan(self, steps) -> str:
-        """
-        Execute TaskStep objects in order.
-        """
+    def _execute_plan(
+        self,
+        steps,
+    ) -> str:
+        """Execute task steps in order."""
 
         if not steps:
             return (
@@ -480,9 +553,12 @@ class AccessEngine:
                 f"Step {index}: {result}"
             )
 
-            # Never continue after confirmation request.
+            # Stop if confirmation is required.
+
             if self.pending_action is not None:
                 break
+
+            # Stop if ACCESS exits.
 
             if not self.running:
                 break
@@ -498,9 +574,9 @@ class AccessEngine:
             + "\n".join(results)
         )
 
-    # =====================================================
+    # ========================================================
     # CONFIRMATION
-    # =====================================================
+    # ========================================================
 
     def _request_confirmation(
         self,
@@ -509,6 +585,7 @@ class AccessEngine:
         """Request confirmation for dangerous actions."""
 
         if action not in self.confirmation_actions:
+
             return (
                 "This action is not configured "
                 "for confirmation."
@@ -517,6 +594,7 @@ class AccessEngine:
         self.pending_action = action
 
         if action == "shutdown":
+
             return (
                 "Shutdown requested.\n"
                 "ACCESS will NOT shut down the "
@@ -528,6 +606,7 @@ class AccessEngine:
             )
 
         if action == "restart":
+
             return (
                 "Restart requested.\n"
                 "ACCESS will NOT restart the "
@@ -539,11 +618,11 @@ class AccessEngine:
             )
 
         if action == "sleep":
+
             return (
                 "Sleep requested.\n"
                 "ACCESS will NOT put the "
                 "computer to sleep yet.\n"
-                "Please save your work first.\n"
                 "Type 'yes', 'sure', or 'ok' "
                 "to confirm.\n"
                 "Type 'cancel' to abort."
@@ -553,6 +632,10 @@ class AccessEngine:
 
         return "This action requires confirmation."
 
+    # ========================================================
+    # HANDLE CONFIRMATION
+    # ========================================================
+
     def _handle_confirmation(
         self,
         command: str,
@@ -561,9 +644,9 @@ class AccessEngine:
 
         answer = command.strip().lower()
 
-        # -------------------------------------------------
+        # ----------------------------------------------------
         # CANCEL
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
         if answer in {
             "cancel",
@@ -572,6 +655,7 @@ class AccessEngine:
             "abort",
             "stop",
         }:
+
             action = self.pending_action
 
             self.pending_action = None
@@ -581,9 +665,9 @@ class AccessEngine:
                 "No system action was performed."
             )
 
-        # -------------------------------------------------
+        # ----------------------------------------------------
         # CONFIRM
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
         if answer in {
             "yes",
@@ -594,6 +678,7 @@ class AccessEngine:
             "confirm",
             "confirmed",
         }:
+
             action = self.pending_action
 
             self.pending_action = None
@@ -609,15 +694,15 @@ class AccessEngine:
             "Type 'cancel' to abort."
         )
 
+    # ========================================================
+    # CONFIRMED ACTION
+    # ========================================================
+
     def _execute_confirmed_action(
         self,
         action: str,
     ) -> str:
-        """
-        Execute confirmed actions through SystemControl.
-
-        No arbitrary shell commands are accepted here.
-        """
+        """Execute confirmed system actions."""
 
         if action == "shutdown":
             return self.system.execute_shutdown()
@@ -632,16 +717,15 @@ class AccessEngine:
             f"Unknown confirmed action: {action}"
         )
 
-    # =====================================================
+    # ========================================================
     # SCREENSHOT
-    # =====================================================
+    # ========================================================
 
     def _handle_screenshot(self) -> str:
-        """
-        Capture a screenshot using platform-native tools.
-        """
+        """Capture a screenshot using platform tools."""
 
         try:
+
             screenshot_dir = (
                 Path.home()
                 / "Pictures"
@@ -660,11 +744,12 @@ class AccessEngine:
 
             system_name = platform.system()
 
-            # -------------------------------------------------
+            # ------------------------------------------------
             # macOS
-            # -------------------------------------------------
+            # ------------------------------------------------
 
             if system_name == "Darwin":
+
                 subprocess.run(
                     [
                         "screencapture",
@@ -674,13 +759,15 @@ class AccessEngine:
                     check=True,
                 )
 
-            # -------------------------------------------------
-            # Windows
-            # -------------------------------------------------
+            # ------------------------------------------------
+            # WINDOWS
+            # ------------------------------------------------
 
             elif system_name == "Windows":
 
-                escaped_path = str(filename).replace(
+                escaped_path = str(
+                    filename
+                ).replace(
                     "'",
                     "''",
                 )
@@ -695,7 +782,8 @@ class AccessEngine:
                     "PrimaryScreen.Bounds; "
                     "$bmp=New-Object "
                     "System.Drawing.Bitmap("
-                    "$bounds.Width,$bounds.Height); "
+                    "$bounds.Width,"
+                    "$bounds.Height); "
                     "$g=[System.Drawing.Graphics]::"
                     "FromImage($bmp); "
                     "$g.CopyFromScreen("
@@ -719,15 +807,16 @@ class AccessEngine:
                     check=True,
                 )
 
-            # -------------------------------------------------
-            # Linux
-            # -------------------------------------------------
+            # ------------------------------------------------
+            # LINUX
+            # ------------------------------------------------
 
             elif system_name == "Linux":
 
                 if shutil.which(
                     "gnome-screenshot"
                 ):
+
                     subprocess.run(
                         [
                             "gnome-screenshot",
@@ -737,7 +826,17 @@ class AccessEngine:
                         check=True,
                     )
 
+                elif shutil.which("grim"):
+                    subprocess.run(
+                        [
+                            "grim",
+                            str(filename),
+                        ],
+                        check=True,
+                    )
+
                 elif shutil.which("import"):
+
                     subprocess.run(
                         [
                             "import",
@@ -749,6 +848,7 @@ class AccessEngine:
                     )
 
                 elif shutil.which("scrot"):
+
                     subprocess.run(
                         [
                             "scrot",
@@ -766,6 +866,7 @@ class AccessEngine:
                     )
 
             else:
+
                 return (
                     f"Screenshot is not supported "
                     f"on {system_name}."
@@ -776,27 +877,27 @@ class AccessEngine:
             )
 
         except Exception as error:
+
             return (
                 f"Screenshot tool unavailable: "
                 f"{error}"
             )
 
-    # =====================================================
+    # ========================================================
     # FILE OPERATIONS
-    # =====================================================
+    # ========================================================
 
     def _handle_file_operation(
         self,
         operation: str,
         target: str,
     ) -> str:
-        """Handle local file operations."""
 
         try:
 
-            # -------------------------------------------------
+            # ------------------------------------------------
             # CREATE
-            # -------------------------------------------------
+            # ------------------------------------------------
 
             if operation == "create":
 
@@ -805,6 +906,7 @@ class AccessEngine:
                 )
 
                 if path.exists():
+
                     return (
                         f"File already exists: "
                         f"{path}"
@@ -817,11 +919,13 @@ class AccessEngine:
 
                 path.touch()
 
-                return f"File created: {path}"
+                return (
+                    f"File created: {path}"
+                )
 
-            # -------------------------------------------------
+            # ------------------------------------------------
             # READ
-            # -------------------------------------------------
+            # ------------------------------------------------
 
             if operation == "read":
 
@@ -830,11 +934,13 @@ class AccessEngine:
                 )
 
                 if not path.exists():
+
                     return (
                         f"File not found: {path}"
                     )
 
                 if not path.is_file():
+
                     return (
                         f"Not a file: {path}"
                     )
@@ -849,9 +955,9 @@ class AccessEngine:
                     else "(File is empty.)"
                 )
 
-            # -------------------------------------------------
+            # ------------------------------------------------
             # DELETE
-            # -------------------------------------------------
+            # ------------------------------------------------
 
             if operation == "delete":
 
@@ -860,11 +966,13 @@ class AccessEngine:
                 )
 
                 if not path.exists():
+
                     return (
                         f"File not found: {path}"
                     )
 
                 if path.is_dir():
+
                     return (
                         "Delete operation only "
                         f"supports files: {path}"
@@ -872,18 +980,23 @@ class AccessEngine:
 
                 path.unlink()
 
-                return f"File deleted: {path}"
+                return (
+                    f"File deleted: {path}"
+                )
 
-            # -------------------------------------------------
+            # ------------------------------------------------
             # SEARCH
-            # -------------------------------------------------
+            # ------------------------------------------------
 
             if operation == "search":
-                return self._search_file(target)
 
-            # -------------------------------------------------
+                return self._search_file(
+                    target
+                )
+
+            # ------------------------------------------------
             # COPY
-            # -------------------------------------------------
+            # ------------------------------------------------
 
             if operation == "copy":
 
@@ -896,12 +1009,16 @@ class AccessEngine:
                 )
 
                 destination = Path(
-                    os.path.expanduser(destination)
+                    os.path.expanduser(
+                        destination
+                    )
                 )
 
                 if not source.exists():
+
                     return (
-                        f"Source not found: {source}"
+                        f"Source not found: "
+                        f"{source}"
                     )
 
                 if source.is_dir():
@@ -918,6 +1035,7 @@ class AccessEngine:
                         destination.exists()
                         and destination.is_dir()
                     ):
+
                         destination = (
                             destination
                             / source.name
@@ -938,9 +1056,9 @@ class AccessEngine:
                     f"{destination}"
                 )
 
-            # -------------------------------------------------
+            # ------------------------------------------------
             # MOVE
-            # -------------------------------------------------
+            # ------------------------------------------------
 
             if operation == "move":
 
@@ -953,18 +1071,23 @@ class AccessEngine:
                 )
 
                 destination = Path(
-                    os.path.expanduser(destination)
+                    os.path.expanduser(
+                        destination
+                    )
                 )
 
                 if not source.exists():
+
                     return (
-                        f"Source not found: {source}"
+                        f"Source not found: "
+                        f"{source}"
                     )
 
                 if (
                     destination.exists()
                     and destination.is_dir()
                 ):
+
                     destination = (
                         destination
                         / source.name
@@ -985,9 +1108,9 @@ class AccessEngine:
                     f"{destination}"
                 )
 
-            # -------------------------------------------------
+            # ------------------------------------------------
             # RENAME
-            # -------------------------------------------------
+            # ------------------------------------------------
 
             if operation == "rename":
 
@@ -1000,13 +1123,16 @@ class AccessEngine:
                 )
 
                 if not source.exists():
+
                     return (
-                        f"Source not found: {source}"
+                        f"Source not found: "
+                        f"{source}"
                     )
 
                 new_name = new_name.strip()
 
                 if not new_name:
+
                     return (
                         "New name cannot be empty."
                     )
@@ -1015,7 +1141,9 @@ class AccessEngine:
                     source.parent / new_name
                 )
 
-                source.rename(destination)
+                source.rename(
+                    destination
+                )
 
                 return (
                     f"Renamed: {source} -> "
@@ -1028,43 +1156,42 @@ class AccessEngine:
             )
 
         except UnicodeDecodeError:
+
             return (
                 "Unable to read the file "
                 "as UTF-8 text."
             )
 
         except Exception as error:
+
             return (
-                f"File operation failed: {error}"
+                f"File operation failed: "
+                f"{error}"
             )
 
-    # =====================================================
+    # ========================================================
     # FILE HELPERS
-    # =====================================================
+    # ========================================================
 
     @staticmethod
     def _split_pair(target: str):
-        """
-        Split:
-
-            source|destination
-        """
 
         if "|" not in target:
+
             raise ValueError(
                 "Expected the format "
                 "'source|destination'."
             )
 
-        source, destination = target.split(
-            "|",
-            1,
+        source, destination = (
+            target.split("|", 1)
         )
 
         if (
             not source.strip()
             or not destination.strip()
         ):
+
             raise ValueError(
                 "Source and destination must "
                 "both be specified."
@@ -1077,17 +1204,19 @@ class AccessEngine:
 
     @staticmethod
     def _search_file(target: str) -> str:
-        """Search the current directory recursively."""
+        """Search current directory recursively."""
 
         query = target.strip()
 
         if not query:
+
             return (
                 "Please specify a filename "
                 "to search for."
             )
 
         root = Path.cwd()
+
         matches = []
 
         try:
@@ -1099,6 +1228,7 @@ class AccessEngine:
                     and query.lower()
                     in path.name.lower()
                 ):
+
                     matches.append(path)
 
                 if len(matches) >= 50:
@@ -1108,8 +1238,10 @@ class AccessEngine:
             pass
 
         if not matches:
+
             return (
-                f"No files found matching: {query}"
+                f"No files found matching: "
+                f"{query}"
             )
 
         return (
@@ -1120,48 +1252,68 @@ class AccessEngine:
             )
         )
 
-    # =====================================================
+    # ========================================================
     # MEMORY
-    # =====================================================
+    # ========================================================
 
     def _save_memory(
         self,
         user_input: str,
         response: str,
     ):
-        """Save every processed interaction."""
+        """Save processed interaction."""
 
         try:
+
             self.memory.save(
                 user_input,
                 response,
             )
+
         except Exception:
-            # Memory failure must not crash ACCESS.
+
+            # Memory failure must never crash ACCESS.
+
             pass
+
+    # ========================================================
+    # RECENT MEMORY
+    # ========================================================
 
     def get_recent_memory(
         self,
         limit=10,
     ):
-        """Existing memory API."""
+        """Return recent memory."""
 
         try:
-            return self.memory.recent(limit)
+
+            return self.memory.recent(
+                limit
+            )
+
         except Exception:
+
             return []
+
+    # ========================================================
+    # SEARCH MEMORY
+    # ========================================================
 
     def search_memory(
         self,
         query: str,
         limit=10,
     ):
-        """Existing memory API."""
+        """Search stored memory."""
 
         try:
+
             return self.memory.search(
                 query,
                 limit,
             )
+
         except Exception:
+
             return []

@@ -36,7 +36,8 @@ DEBUG = os.getenv(
 
 SUPPORTED_PLATFORMS = [
     "Windows",
-    "macOS"
+    "macOS",
+    "Linux",
 ]
 
 DEFAULT_MODE = "offline-first"
