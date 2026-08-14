@@ -24,6 +24,12 @@ from typing import Callable
 from core.engine import AccessEngine
 from app.desktop_integration import DesktopIntegration
 from app.reminders import ReminderService
+from app.system_monitor import (
+    SystemMonitor,
+    SystemSnapshot,
+    format_bytes,
+    format_duration,
+)
 from ui.syntax_highlighter import HighlightedCode, highlight_code
 from voice import VoiceError, VoiceService
 
@@ -206,6 +212,13 @@ class AccessGUI:
         self._results: queue.Queue[tuple[str, str]] = queue.Queue()
         self._voice_results: queue.Queue[tuple[bool, str]] = queue.Queue()
         self._desktop_events: queue.Queue[str] = queue.Queue()
+        self._dashboard_results: queue.Queue[
+            tuple[int, SystemSnapshot | Exception]
+        ] = queue.Queue()
+        self._dashboard_window: tk.Toplevel | None = None
+        self._dashboard_generation = 0
+        self._dashboard_refreshing = False
+        self._dashboard_widgets: dict[str, dict[str, object]] = {}
         available_fonts = set(tkfont.families(self.root))
         fluent_fonts = [
             name
@@ -256,6 +269,7 @@ class AccessGUI:
         )
         self.reminders = ReminderService(self.settings_path.with_name("reminders.json"))
         self.desktop = DesktopIntegration(self._desktop_events.put)
+        self.system_monitor = SystemMonitor()
 
         self.root.title(f"{APP_NAME} — Desktop Assistant")
         initial_geometry, initial_size = self._initial_window_geometry()
@@ -508,6 +522,7 @@ class AccessGUI:
         ).pack(anchor="w", padx=34, pady=(0, 8))
 
         self._nav_button("✦", "Assistant", lambda: self.command_entry.focus_set(), active=True)
+        self._nav_button("▦", "Dashboard", self.show_system_dashboard)
         self._nav_button("↻", "New conversation", self.clear_conversation)
         self._nav_button("◷", "History", self.show_history)
         self._nav_button("?", "Commands", self.show_help)
@@ -738,6 +753,363 @@ class AccessGUI:
         handler = handlers.get(str(action.get("value", "")))
         if handler:
             handler()
+
+    def show_system_dashboard(self) -> None:
+        """Show a live, read-only overview of system health and identity."""
+
+        if self._dashboard_window and self._dashboard_window.winfo_exists():
+            self._dashboard_window.deiconify()
+            self._dashboard_window.lift()
+            self._dashboard_window.focus_force()
+            return
+
+        c = self.colors
+        window = tk.Toplevel(self.root)
+        self._dashboard_window = window
+        self._dashboard_generation += 1
+        self._dashboard_refreshing = False
+        self._dashboard_widgets = {}
+        left, top, work_width, work_height = self._work_area()
+        width = min(1050, max(1, work_width - 80))
+        height = min(720, max(1, work_height - 70))
+        x = left + max(0, (work_width - width) // 2)
+        y = top + max(0, (work_height - height) // 2)
+        window.title("ACCESS — System Dashboard")
+        window.geometry(f"{width}x{height}+{x}+{y}")
+        window.minsize(min(760, width), min(560, height))
+        window.configure(bg=c["bg"])
+        window.transient(self.root)
+        window.protocol("WM_DELETE_WINDOW", self._close_system_dashboard)
+
+        header = tk.Frame(window, bg=c["bg"])
+        header.pack(fill="x", padx=30, pady=(24, 16))
+        title_box = tk.Frame(header, bg=c["bg"])
+        title_box.pack(side="left")
+        tk.Label(
+            title_box,
+            text="System Dashboard",
+            bg=c["bg"],
+            fg=c["text"],
+            font=("Segoe UI", 21, "bold"),
+        ).pack(anchor="w")
+        self.dashboard_status_label = tk.Label(
+            title_box,
+            text="Collecting system information…",
+            bg=c["bg"],
+            fg=c["muted"],
+            font=("Segoe UI", 9),
+        )
+        self.dashboard_status_label.pack(anchor="w", pady=(4, 0))
+        tk.Button(
+            header,
+            text="Refresh",
+            command=self._request_dashboard_refresh,
+            relief="flat",
+            bd=0,
+            padx=18,
+            pady=9,
+            bg=c["surface_2"],
+            activebackground=c["border"],
+            fg=c["text"],
+            activeforeground=c["text"],
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+        ).pack(side="right")
+
+        cards = tk.Frame(window, bg=c["bg"])
+        cards.pack(fill="x", padx=30)
+        for column in range(3):
+            cards.columnconfigure(column, weight=1, uniform="dashboard")
+        self._dashboard_metric_card(cards, "cpu", "CPU", "Processor utilization", c["accent"], 0, 0)
+        self._dashboard_metric_card(cards, "memory", "MEMORY", "Physical memory", c["blue"], 0, 1)
+        self._dashboard_metric_card(cards, "disk", "STORAGE", "System drive", "#A78BFA", 0, 2)
+        self._dashboard_metric_card(cards, "battery", "BATTERY", "Power status", "#F59E0B", 1, 0)
+        self._dashboard_metric_card(
+            cards,
+            "network",
+            "NETWORK",
+            "Live transfer rate",
+            c["success"],
+            1,
+            1,
+            columnspan=2,
+            progress=False,
+        )
+
+        lower = tk.Frame(window, bg=c["bg"])
+        lower.pack(fill="both", expand=True, padx=30, pady=(16, 26))
+        lower.columnconfigure(0, weight=3)
+        lower.columnconfigure(1, weight=2)
+        lower.rowconfigure(0, weight=1)
+
+        device_panel = tk.Frame(
+            lower,
+            bg=c["surface"],
+            highlightthickness=1,
+            highlightbackground=c["border"],
+        )
+        device_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        tk.Label(
+            device_panel,
+            text="DEVICE INFORMATION",
+            bg=c["surface"],
+            fg=c["accent"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", padx=20, pady=(16, 10))
+        self.dashboard_device_labels: dict[str, tk.Label] = {}
+        for key, label_text in (
+            ("device", "Device name"),
+            ("os", "Operating system"),
+            ("uptime", "Uptime"),
+            ("ip", "Local IP"),
+        ):
+            row = tk.Frame(device_panel, bg=c["surface"])
+            row.pack(fill="x", padx=20, pady=5)
+            tk.Label(
+                row,
+                text=label_text,
+                width=17,
+                anchor="w",
+                bg=c["surface"],
+                fg=c["muted"],
+                font=("Segoe UI", 9),
+            ).pack(side="left")
+            value_label = tk.Label(
+                row,
+                text="—",
+                anchor="w",
+                bg=c["surface"],
+                fg=c["text"],
+                font=("Segoe UI", 10, "bold"),
+            )
+            value_label.pack(side="left", fill="x", expand=True)
+            self.dashboard_device_labels[key] = value_label
+
+        warning_panel = tk.Frame(
+            lower,
+            bg=c["surface"],
+            highlightthickness=1,
+            highlightbackground=c["border"],
+        )
+        warning_panel.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        tk.Label(
+            warning_panel,
+            text="SYSTEM HEALTH",
+            bg=c["surface"],
+            fg=c["accent"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", padx=20, pady=(16, 10))
+        self.dashboard_warning_label = tk.Label(
+            warning_panel,
+            text="Checking system health…",
+            justify="left",
+            anchor="nw",
+            wraplength=300,
+            bg=c["surface"],
+            fg=c["muted"],
+            font=("Segoe UI", 10),
+        )
+        self.dashboard_warning_label.pack(fill="both", expand=True, padx=20, pady=(0, 16))
+
+        self._request_dashboard_refresh()
+
+    def _dashboard_metric_card(
+        self,
+        parent: tk.Widget,
+        key: str,
+        title: str,
+        subtitle: str,
+        color: str,
+        row: int,
+        column: int,
+        *,
+        columnspan: int = 1,
+        progress: bool = True,
+    ) -> None:
+        c = self.colors
+        card = tk.Frame(
+            parent,
+            height=128,
+            bg=c["surface"],
+            highlightthickness=1,
+            highlightbackground=c["border"],
+        )
+        card.grid(
+            row=row,
+            column=column,
+            columnspan=columnspan,
+            sticky="nsew",
+            padx=6,
+            pady=6,
+        )
+        card.grid_propagate(False)
+        accent = tk.Frame(card, width=4, bg=color)
+        accent.pack(side="left", fill="y")
+        body = tk.Frame(card, bg=c["surface"])
+        body.pack(side="left", fill="both", expand=True, padx=16, pady=12)
+        tk.Label(
+            body,
+            text=title,
+            bg=c["surface"],
+            fg=c["muted"],
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w")
+        value = tk.Label(
+            body,
+            text="—",
+            bg=c["surface"],
+            fg=c["text"],
+            font=("Segoe UI", 20, "bold"),
+        )
+        value.pack(anchor="w", pady=(3, 0))
+        detail = tk.Label(
+            body,
+            text=subtitle,
+            bg=c["surface"],
+            fg=c["muted"],
+            font=("Segoe UI", 8),
+        )
+        detail.pack(anchor="w", pady=(2, 0))
+        meter = None
+        meter_bar = None
+        if progress:
+            meter = tk.Canvas(body, height=6, bg=c["surface_2"], bd=0, highlightthickness=0)
+            meter.pack(fill="x", pady=(8, 0))
+            meter_bar = meter.create_rectangle(0, 0, 0, 6, fill=color, outline="")
+        self._dashboard_widgets[key] = {
+            "value": value,
+            "detail": detail,
+            "meter": meter,
+            "bar": meter_bar,
+            "color": color,
+        }
+
+    def _request_dashboard_refresh(self) -> None:
+        if (
+            self._dashboard_refreshing
+            or self._dashboard_window is None
+            or not self._dashboard_window.winfo_exists()
+        ):
+            return
+        self._dashboard_refreshing = True
+        self.dashboard_status_label.configure(
+            text="Updating…",
+            fg=self.colors["accent"],
+        )
+        generation = self._dashboard_generation
+        threading.Thread(
+            target=self._collect_dashboard_snapshot,
+            args=(generation,),
+            name="access-system-monitor",
+            daemon=True,
+        ).start()
+
+    def _collect_dashboard_snapshot(self, generation: int) -> None:
+        try:
+            result: SystemSnapshot | Exception = self.system_monitor.snapshot()
+        except Exception as error:
+            result = error
+        self._dashboard_results.put((generation, result))
+
+    def _complete_dashboard_refresh(
+        self,
+        generation: int,
+        result: SystemSnapshot | Exception,
+    ) -> None:
+        window = self._dashboard_window
+        if (
+            generation != self._dashboard_generation
+            or window is None
+            or not window.winfo_exists()
+        ):
+            return
+        self._dashboard_refreshing = False
+        if isinstance(result, Exception):
+            self.dashboard_status_label.configure(
+                text=f"Unable to refresh: {result}",
+                fg=self.colors["danger"],
+            )
+        else:
+            self._apply_dashboard_snapshot(result)
+        window.after(2000, self._request_dashboard_refresh)
+
+    def _apply_dashboard_snapshot(self, snapshot: SystemSnapshot) -> None:
+        values = {
+            "cpu": (f"{snapshot.cpu_percent:.0f}%", "Current processor utilization"),
+            "memory": (
+                f"{snapshot.memory_percent:.0f}%",
+                f"{format_bytes(snapshot.memory_used)} of {format_bytes(snapshot.memory_total)} used",
+            ),
+            "disk": (
+                f"{snapshot.disk_percent:.0f}%",
+                f"{format_bytes(snapshot.disk_used)} of {format_bytes(snapshot.disk_total)} used",
+            ),
+        }
+        if snapshot.battery_percent is None:
+            values["battery"] = ("—", "Battery not detected")
+        else:
+            power = "Charging" if snapshot.battery_plugged else format_duration(snapshot.battery_seconds_left) + " remaining"
+            values["battery"] = (f"{snapshot.battery_percent:.0f}%", power)
+        values["network"] = (
+            f"↓ {format_bytes(snapshot.network_download_rate)}/s   ↑ {format_bytes(snapshot.network_upload_rate)}/s",
+            f"Session totals: ↓ {format_bytes(snapshot.network_received)}   ↑ {format_bytes(snapshot.network_sent)}",
+        )
+        percentages = {
+            "cpu": snapshot.cpu_percent,
+            "memory": snapshot.memory_percent,
+            "disk": snapshot.disk_percent,
+            "battery": snapshot.battery_percent or 0,
+        }
+        for key, (value_text, detail_text) in values.items():
+            widgets = self._dashboard_widgets[key]
+            widgets["value"].configure(text=value_text)
+            widgets["detail"].configure(text=detail_text)
+            meter = widgets["meter"]
+            bar = widgets["bar"]
+            if meter is not None and bar is not None:
+                meter.update_idletasks()
+                width = max(1, meter.winfo_width())
+                percent = max(0.0, min(100.0, percentages[key]))
+                meter.coords(bar, 0, 0, width * percent / 100, 6)
+                warning = percent >= 90 or (
+                    key == "battery"
+                    and snapshot.battery_percent is not None
+                    and snapshot.battery_percent <= 15
+                    and not snapshot.battery_plugged
+                )
+                meter.itemconfigure(
+                    bar,
+                    fill=self.colors["danger"] if warning else widgets["color"],
+                )
+
+        self.dashboard_device_labels["device"].configure(text=snapshot.device_name)
+        self.dashboard_device_labels["os"].configure(text=snapshot.os_version)
+        self.dashboard_device_labels["uptime"].configure(text=format_duration(snapshot.uptime_seconds))
+        self.dashboard_device_labels["ip"].configure(text=snapshot.local_ip)
+        if snapshot.warnings:
+            warning_text = "\n\n".join(f"⚠ {warning}" for warning in snapshot.warnings)
+            self.dashboard_warning_label.configure(
+                text=warning_text,
+                fg=self.colors["danger"],
+            )
+        else:
+            self.dashboard_warning_label.configure(
+                text="✓ Everything looks healthy. No resource warnings detected.",
+                fg=self.colors["success"],
+            )
+        sampled = datetime.fromtimestamp(snapshot.sampled_at).strftime("%I:%M:%S %p")
+        self.dashboard_status_label.configure(
+            text=f"Updated {sampled}  •  Refreshes every 2 seconds",
+            fg=self.colors["muted"],
+        )
+
+    def _close_system_dashboard(self) -> None:
+        self._dashboard_generation += 1
+        self._dashboard_refreshing = False
+        if self._dashboard_window and self._dashboard_window.winfo_exists():
+            self._dashboard_window.destroy()
+        self._dashboard_window = None
+        self._dashboard_widgets = {}
 
     def show_settings(self) -> None:
         """Open the central application, voice, and desktop settings window."""
@@ -1538,6 +1910,15 @@ class AccessGUI:
         if command_lower in {"settings", "/settings", "open settings"}:
             self.show_settings()
             return
+        if command_lower in {
+            "dashboard",
+            "/dashboard",
+            "system dashboard",
+            "open dashboard",
+            "system health",
+        }:
+            self.show_system_dashboard()
+            return
         if command_lower == "status":
             self._add_message(command, sender="user")
             response = (
@@ -1585,6 +1966,12 @@ class AccessGUI:
         try:
             while True:
                 self._handle_desktop_event(self._desktop_events.get_nowait())
+        except queue.Empty:
+            pass
+        try:
+            while True:
+                generation, result = self._dashboard_results.get_nowait()
+                self._complete_dashboard_refresh(generation, result)
         except queue.Empty:
             pass
         if self.root.winfo_exists():
@@ -2147,7 +2534,7 @@ class AccessGUI:
             "  search file report  •  copy file A to B\n"
             "  move file A to B  •  rename file A to B\n"
             "  remind me in 10 minutes to stretch\n"
-            "  show reminders  •  open settings\n"
+            "  show reminders  •  system dashboard  •  open settings\n"
             "  shutdown  •  restart  •  sleep\n\n"
             "Shortcuts: Enter to send, Ctrl+K to focus, Ctrl+Shift+V to listen, "
             "Ctrl+Alt+Space for global voice, Ctrl+N for a new conversation, F1 for help."
@@ -2164,6 +2551,8 @@ class AccessGUI:
         self.command_entry.focus_set()
 
     def toggle_theme(self) -> None:
+        if self._dashboard_window and self._dashboard_window.winfo_exists():
+            self._close_system_dashboard()
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
         settings = self._read_settings()
         settings["theme"] = self.theme_name

@@ -26,6 +26,7 @@ syntax-highlighted code responses, and locally stored conversation history.
 - Read assistant responses aloud with the operating system's speech engine.
 - Schedule persistent reminders with desktop notifications.
 - Stay available in the system tray with a global voice shortcut.
+- Monitor live CPU, memory, storage, battery, and network activity.
 
 Some system controls depend on the operating system, desktop environment, and
 installed utilities. ACCESS reports when an operation is unavailable.
@@ -129,6 +130,21 @@ cancel reminder a1b2c3d4
 ```
 
 Use the identifier shown by `show reminders` when cancelling one.
+
+### System dashboard
+
+Open **Dashboard** from the sidebar or enter `system dashboard`. It refreshes in
+the background every two seconds and displays:
+
+- CPU and physical-memory utilization;
+- system-drive usage;
+- battery charge, power state, and estimated time remaining;
+- current network download/upload rates and cumulative totals;
+- device name, operating system, uptime, and local IP address; and
+- warnings for high CPU, memory, or storage use and low unplugged battery.
+
+Dashboard monitoring is read-only and remains responsive while metrics are
+sampled on a worker thread.
 
 The commands `/help`, `?`, `/history`, and `/clear` are also supported.
 

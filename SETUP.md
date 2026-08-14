@@ -325,6 +325,18 @@ Enable notifications in **Settings** and verify that the operating system allows
 Python or ACCESS to send notifications. Pending reminders remain stored locally
 and will still appear inside the ACCESS conversation when they become due.
 
+### Dashboard metrics are unavailable
+
+Reinstall the project requirements to restore the cross-platform system monitor:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Battery information displays as unavailable on desktop computers or platforms
+that do not expose a battery sensor. Network speed begins calculating after the
+first pair of dashboard samples.
+
 ### Reset Quick Actions manually
 
 Close ACCESS and remove the settings file for the current platform:
