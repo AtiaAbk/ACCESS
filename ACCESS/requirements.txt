@@ -7,3 +7,6 @@ requests>=2.31.0
 SpeechRecognition[audio]>=3.14.0
 pocketsphinx==5.0.4
 pyttsx3>=2.90
+pystray>=0.19.5
+pynput>=1.7.6
+plyer>=2.1.0

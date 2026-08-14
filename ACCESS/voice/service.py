@@ -27,9 +27,19 @@ class VoiceNotUnderstood(VoiceError):
 class VoiceService:
     """Provide offline microphone transcription and queued speech output."""
 
-    def __init__(self, language: str = "en-US", rate: int = 185):
+    def __init__(
+        self,
+        language: str = "en-US",
+        rate: int = 185,
+        volume: float = 1.0,
+        voice_id: str | None = None,
+        microphone_index: int | None = None,
+    ):
         self.language = language
         self.rate = rate
+        self.volume = max(0.0, min(1.0, volume))
+        self.voice_id = voice_id
+        self.microphone_index = microphone_index
         self._speech_queue: queue.Queue[str | None] = queue.Queue()
         self._speech_thread: threading.Thread | None = None
         self._thread_lock = threading.Lock()
@@ -58,7 +68,7 @@ class VoiceService:
         recognizer = sr.Recognizer()
         recognizer.dynamic_energy_threshold = True
         try:
-            with sr.Microphone() as source:
+            with sr.Microphone(device_index=self.microphone_index) as source:
                 recognizer.adjust_for_ambient_noise(source, duration=0.5)
                 audio = recognizer.listen(
                     source,
@@ -100,6 +110,52 @@ class VoiceService:
         self._speech_queue.put(spoken_text)
         return True
 
+    def configure(
+        self,
+        *,
+        language: str | None = None,
+        rate: int | None = None,
+        volume: float | None = None,
+        voice_id: str | None = None,
+        microphone_index: int | None = None,
+    ) -> None:
+        """Apply voice preferences used by future listen/speak operations."""
+
+        if language:
+            self.language = language
+        if rate is not None:
+            self.rate = max(80, min(320, int(rate)))
+        if volume is not None:
+            self.volume = max(0.0, min(1.0, float(volume)))
+        self.voice_id = voice_id or None
+        self.microphone_index = microphone_index
+
+    def microphones(self) -> list[tuple[int, str]]:
+        if not self.can_listen:
+            return []
+        try:
+            import speech_recognition as sr
+
+            return list(enumerate(sr.Microphone.list_microphone_names()))
+        except Exception:
+            return []
+
+    def voices(self) -> list[tuple[str, str]]:
+        if not self.can_speak:
+            return []
+        try:
+            import pyttsx3
+
+            engine = pyttsx3.init()
+            voices = [
+                (str(item.id), str(getattr(item, "name", item.id)))
+                for item in engine.getProperty("voices")
+            ]
+            engine.stop()
+            return voices
+        except Exception:
+            return []
+
     def stop(self) -> None:
         """Discard queued speech and ask the speech worker to stop."""
 
@@ -127,7 +183,6 @@ class VoiceService:
             import pyttsx3
 
             engine = pyttsx3.init()
-            engine.setProperty("rate", self.rate)
         except Exception:
             return
 
@@ -140,6 +195,10 @@ class VoiceService:
                     pass
                 return
             try:
+                engine.setProperty("rate", self.rate)
+                engine.setProperty("volume", self.volume)
+                if self.voice_id:
+                    engine.setProperty("voice", self.voice_id)
                 engine.say(text)
                 engine.runAndWait()
             except Exception:

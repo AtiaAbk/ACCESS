@@ -311,6 +311,20 @@ Voice recognition uses the bundled offline PocketSphinx model. It works best
 with short commands in a quiet room. The speaker button beside **Send** controls
 whether assistant responses are read aloud.
 
+### Tray icon or global shortcut is unavailable
+
+Open **Settings** and confirm that tray mode and the global shortcut are enabled.
+The shortcut is `Ctrl+Alt+Space`. Linux desktop environments may require a tray
+extension, and macOS may request Accessibility permission for global keyboard
+monitoring. ACCESS continues to work normally when either integration is
+unavailable.
+
+### Reminder notifications do not appear
+
+Enable notifications in **Settings** and verify that the operating system allows
+Python or ACCESS to send notifications. Pending reminders remain stored locally
+and will still appear inside the ACCESS conversation when they become due.
+
 ### Reset Quick Actions manually
 
 Close ACCESS and remove the settings file for the current platform:

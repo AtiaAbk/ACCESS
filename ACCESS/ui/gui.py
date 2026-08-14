@@ -22,6 +22,8 @@ from tkinter import messagebox, simpledialog, ttk
 from typing import Callable
 
 from core.engine import AccessEngine
+from app.desktop_integration import DesktopIntegration
+from app.reminders import ReminderService
 from ui.syntax_highlighter import HighlightedCode, highlight_code
 from voice import VoiceError, VoiceService
 
@@ -189,13 +191,21 @@ class AccessGUI:
                 pass
         self.root = root or tk.Tk()
         self.engine = engine or AccessEngine()
-        self.theme_name = "dark"
+        self.settings_path = self._settings_file()
+        startup_settings = self._read_settings()
+        self.theme_name = str(startup_settings.get("theme", "dark"))
+        if self.theme_name not in THEMES:
+            self.theme_name = "dark"
         self.colors = THEMES[self.theme_name]
         self.busy = False
+        self.listening = False
+        self._listening_animation_job: str | None = None
+        self._listening_animation_frame = 0
         self._chat_rows: list[tk.Widget] = []
         self._image_refs: list[object] = []
         self._results: queue.Queue[tuple[str, str]] = queue.Queue()
         self._voice_results: queue.Queue[tuple[bool, str]] = queue.Queue()
+        self._desktop_events: queue.Queue[str] = queue.Queue()
         available_fonts = set(tkfont.families(self.root))
         fluent_fonts = [
             name
@@ -211,11 +221,41 @@ class AccessGUI:
                 "TkDefaultFont",
             )
         )
-        self.settings_path = self._settings_file()
         self.quick_action_items = self._load_quick_actions()
-        self.voice = VoiceService()
-        self.voice_responses = self._load_voice_response_setting()
-        self.listening = False
+        voice_settings = startup_settings.get("voice", {})
+        if not isinstance(voice_settings, dict):
+            voice_settings = {}
+        try:
+            voice_rate = int(voice_settings.get("rate", 185))
+            voice_volume = float(voice_settings.get("volume", 1.0))
+            microphone_value = voice_settings.get("microphone_index")
+            microphone_index = (
+                int(microphone_value) if microphone_value is not None else None
+            )
+        except (TypeError, ValueError):
+            voice_rate, voice_volume, microphone_index = 185, 1.0, None
+        self.voice = VoiceService(
+            language=str(voice_settings.get("language", "en-US")),
+            rate=voice_rate,
+            volume=voice_volume,
+            voice_id=voice_settings.get("voice_id") or None,
+            microphone_index=microphone_index,
+        )
+        self.voice_responses = bool(
+            voice_settings.get(
+                "responses_enabled",
+                startup_settings.get("voice_responses", True),
+            )
+        )
+        self.notifications_enabled = bool(
+            startup_settings.get("notifications_enabled", True)
+        )
+        self.minimize_to_tray = bool(startup_settings.get("minimize_to_tray", True))
+        self.global_hotkey_enabled = bool(
+            startup_settings.get("global_hotkey_enabled", True)
+        )
+        self.reminders = ReminderService(self.settings_path.with_name("reminders.json"))
+        self.desktop = DesktopIntegration(self._desktop_events.put)
 
         self.root.title(f"{APP_NAME} — Desktop Assistant")
         initial_geometry, initial_size = self._initial_window_geometry()
@@ -226,7 +266,7 @@ class AccessGUI:
         )
         self.root.overrideredirect(True)
         self.root.configure(bg=self.colors["bg"])
-        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.protocol("WM_DELETE_WINDOW", self._request_close)
         self.app_icon = self._create_app_icon()
         self.root.iconphoto(True, self.app_icon)
         self._drag_origin = (0, 0)
@@ -238,6 +278,8 @@ class AccessGUI:
         self._bind_shortcuts()
         self._add_welcome_message()
         self.root.after(50, self._poll_results)
+        self.root.after(250, self._poll_reminders)
+        self.root.after(100, self._start_desktop_integrations)
         self.command_entry.focus_set()
 
     def _work_area(self) -> tuple[int, int, int, int]:
@@ -378,7 +420,7 @@ class AccessGUI:
             button.pack(side="right", fill="y")
             return button
 
-        control("×", self.close, danger=True)
+        control("×", self._request_close, danger=True)
         control("□", self._toggle_maximize)
         control("—", self._minimize_window)
         for widget in (titlebar, title, icon):
@@ -469,6 +511,7 @@ class AccessGUI:
         self._nav_button("↻", "New conversation", self.clear_conversation)
         self._nav_button("◷", "History", self.show_history)
         self._nav_button("?", "Commands", self.show_help)
+        self._nav_button("⚙", "Settings", self.show_settings)
 
         bottom = tk.Frame(self.sidebar, bg=c["sidebar"])
         bottom.pack(side="bottom", fill="x", padx=22, pady=(8, 34))
@@ -695,6 +738,237 @@ class AccessGUI:
         handler = handlers.get(str(action.get("value", "")))
         if handler:
             handler()
+
+    def show_settings(self) -> None:
+        """Open the central application, voice, and desktop settings window."""
+
+        c = self.colors
+        dialog = tk.Toplevel(self.root)
+        dialog.title("ACCESS — Settings")
+        dialog.geometry("720x620")
+        dialog.minsize(640, 560)
+        dialog.configure(bg=c["bg"])
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        header = tk.Frame(dialog, bg=c["bg"])
+        header.pack(fill="x", padx=30, pady=(26, 18))
+        tk.Label(
+            header,
+            text="Settings",
+            bg=c["bg"],
+            fg=c["text"],
+            font=("Segoe UI", 21, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            header,
+            text="Personalize ACCESS and choose how it integrates with your desktop.",
+            bg=c["bg"],
+            fg=c["muted"],
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(4, 0))
+
+        content = tk.Frame(dialog, bg=c["surface"], highlightthickness=1, highlightbackground=c["border"])
+        content.pack(fill="both", expand=True, padx=30)
+        content.columnconfigure(1, weight=1)
+
+        def section(text: str, row: int) -> int:
+            tk.Label(
+                content,
+                text=text,
+                bg=c["surface"],
+                fg=c["accent"],
+                font=("Segoe UI", 9, "bold"),
+            ).grid(row=row, column=0, columnspan=2, sticky="w", padx=22, pady=(18, 8))
+            return row + 1
+
+        def label(text: str, row: int) -> None:
+            tk.Label(
+                content,
+                text=text,
+                bg=c["surface"],
+                fg=c["text"],
+                font=("Segoe UI", 10),
+            ).grid(row=row, column=0, sticky="w", padx=(22, 16), pady=7)
+
+        def check(text: str, variable: tk.BooleanVar, row: int) -> None:
+            tk.Checkbutton(
+                content,
+                text=text,
+                variable=variable,
+                bg=c["surface"],
+                activebackground=c["surface"],
+                fg=c["text"],
+                activeforeground=c["text"],
+                selectcolor=c["surface_2"],
+                font=("Segoe UI", 10),
+            ).grid(row=row, column=0, columnspan=2, sticky="w", padx=18, pady=5)
+
+        theme_var = tk.StringVar(value=self.theme_name.title())
+        responses_var = tk.BooleanVar(value=self.voice_responses)
+        notifications_var = tk.BooleanVar(value=self.notifications_enabled)
+        tray_var = tk.BooleanVar(value=self.minimize_to_tray)
+        hotkey_var = tk.BooleanVar(value=self.global_hotkey_enabled)
+        rate_var = tk.IntVar(value=self.voice.rate)
+        volume_var = tk.IntVar(value=round(self.voice.volume * 100))
+
+        microphones = self.voice.microphones()
+        microphone_choices = ["Default microphone"] + [
+            f"{index}: {name}" for index, name in microphones
+        ]
+        selected_microphone = "Default microphone"
+        for choice, (index, _name) in zip(microphone_choices[1:], microphones):
+            if index == self.voice.microphone_index:
+                selected_microphone = choice
+                break
+        microphone_var = tk.StringVar(value=selected_microphone)
+
+        voices = self.voice.voices()
+        voice_choices = ["System default"] + [name for _voice_id, name in voices]
+        selected_voice = "System default"
+        for voice_id, name in voices:
+            if voice_id == self.voice.voice_id:
+                selected_voice = name
+                break
+        voice_var = tk.StringVar(value=selected_voice)
+
+        row = section("APPEARANCE", 0)
+        label("Theme", row)
+        ttk.Combobox(
+            content,
+            textvariable=theme_var,
+            values=("Dark", "Light"),
+            state="readonly",
+            width=24,
+        ).grid(row=row, column=1, sticky="ew", padx=(0, 22), pady=7)
+        row = section("VOICE", row + 1)
+        check("Read assistant responses aloud", responses_var, row)
+        row += 1
+        label("Microphone", row)
+        ttk.Combobox(
+            content,
+            textvariable=microphone_var,
+            values=microphone_choices,
+            state="readonly",
+        ).grid(row=row, column=1, sticky="ew", padx=(0, 22), pady=7)
+        row += 1
+        label("System voice", row)
+        ttk.Combobox(
+            content,
+            textvariable=voice_var,
+            values=voice_choices,
+            state="readonly",
+        ).grid(row=row, column=1, sticky="ew", padx=(0, 22), pady=7)
+        row += 1
+        label("Speaking rate", row)
+        tk.Scale(
+            content,
+            variable=rate_var,
+            from_=120,
+            to=240,
+            orient="horizontal",
+            showvalue=True,
+            bg=c["surface"],
+            fg=c["text"],
+            troughcolor=c["surface_2"],
+            highlightthickness=0,
+        ).grid(row=row, column=1, sticky="ew", padx=(0, 22), pady=3)
+        row += 1
+        label("Volume", row)
+        tk.Scale(
+            content,
+            variable=volume_var,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            showvalue=True,
+            bg=c["surface"],
+            fg=c["text"],
+            troughcolor=c["surface_2"],
+            highlightthickness=0,
+        ).grid(row=row, column=1, sticky="ew", padx=(0, 22), pady=3)
+        row = section("DESKTOP", row + 1)
+        check("Show reminder notifications", notifications_var, row)
+        row += 1
+        check("Keep ACCESS available in the system tray", tray_var, row)
+        row += 1
+        check("Enable Ctrl+Alt+Space global voice shortcut", hotkey_var, row)
+
+        footer = tk.Frame(dialog, bg=c["bg"])
+        footer.pack(fill="x", padx=30, pady=22)
+
+        def save() -> None:
+            microphone_index = None
+            if microphone_var.get() != "Default microphone":
+                microphone_index = int(microphone_var.get().split(":", 1)[0])
+            voice_id = None
+            if voice_var.get() != "System default":
+                voice_id = next(
+                    (item_id for item_id, name in voices if name == voice_var.get()),
+                    None,
+                )
+            new_theme = theme_var.get().casefold()
+            self.voice_responses = responses_var.get()
+            self.notifications_enabled = notifications_var.get()
+            self.minimize_to_tray = tray_var.get()
+            self.global_hotkey_enabled = hotkey_var.get()
+            self.voice.configure(
+                language="en-US",
+                rate=rate_var.get(),
+                volume=volume_var.get() / 100,
+                voice_id=voice_id,
+                microphone_index=microphone_index,
+            )
+            settings = self._read_settings()
+            settings.update(
+                {
+                    "theme": new_theme,
+                    "notifications_enabled": self.notifications_enabled,
+                    "minimize_to_tray": self.minimize_to_tray,
+                    "global_hotkey_enabled": self.global_hotkey_enabled,
+                    "voice": {
+                        "responses_enabled": self.voice_responses,
+                        "language": self.voice.language,
+                        "rate": self.voice.rate,
+                        "volume": self.voice.volume,
+                        "voice_id": self.voice.voice_id,
+                        "microphone_index": self.voice.microphone_index,
+                    },
+                }
+            )
+            settings.pop("voice_responses", None)
+            try:
+                self._write_settings(settings)
+            except OSError as error:
+                messagebox.showerror("Unable to save settings", str(error), parent=dialog)
+                return
+            self.desktop.configure_hotkey(self.global_hotkey_enabled)
+            self.desktop.configure_tray(self.minimize_to_tray)
+            dialog.destroy()
+            if new_theme != self.theme_name:
+                self.toggle_theme()
+            else:
+                self.voice_output_button.configure(
+                    text="🔊" if self.voice_responses else "🔇"
+                )
+
+        tk.Button(
+            footer,
+            text="Save settings",
+            command=save,
+            relief="flat",
+            bd=0,
+            padx=22,
+            pady=10,
+            bg=c["accent"],
+            activebackground=c["accent_hover"],
+            fg="#06110F",
+            font=("Segoe UI", 10, "bold"),
+            cursor="hand2",
+        ).pack(side="right")
+        self._small_button(footer, "Cancel", dialog.destroy, c["surface"]).pack(
+            side="right", padx=(0, 10)
+        )
 
     def _render_quick_actions(self) -> None:
         for child in self.quick_grid.winfo_children():
@@ -1242,6 +1516,16 @@ class AccessGUI:
             return
 
         command_lower = command.casefold()
+        try:
+            reminder_response = self.reminders.interpret(command)
+        except OSError as error:
+            reminder_response = f"I couldn't save that reminder: {error}"
+        if reminder_response is not None:
+            self._add_message(command, sender="user")
+            self._add_message(reminder_response, sender="assistant")
+            if self.voice_responses:
+                self.voice.speak(reminder_response)
+            return
         if command_lower in {"clear", "/clear", "clear chat", "new chat", "new conversation"}:
             self.clear_conversation()
             return
@@ -1250,6 +1534,9 @@ class AccessGUI:
             return
         if command_lower in {"history", "/history", "show history"}:
             self.show_history()
+            return
+        if command_lower in {"settings", "/settings", "open settings"}:
+            self.show_settings()
             return
         if command_lower == "status":
             self._add_message(command, sender="user")
@@ -1295,8 +1582,46 @@ class AccessGUI:
                 self._complete_voice_input(succeeded, message)
         except queue.Empty:
             pass
+        try:
+            while True:
+                self._handle_desktop_event(self._desktop_events.get_nowait())
+        except queue.Empty:
+            pass
         if self.root.winfo_exists():
             self.root.after(50, self._poll_results)
+
+    def _poll_reminders(self) -> None:
+        try:
+            due_reminders = self.reminders.due_reminders()
+        except OSError:
+            due_reminders = []
+        for reminder in due_reminders:
+            response = f"Reminder: {reminder.message}"
+            self._add_message(response, sender="assistant")
+            if self.notifications_enabled:
+                self.desktop.notify("ACCESS reminder", reminder.message)
+            if self.voice_responses:
+                self.voice.speak(response)
+        if self.root.winfo_exists():
+            self.root.after(1000, self._poll_reminders)
+
+    def _start_desktop_integrations(self) -> None:
+        self.desktop.start(self.global_hotkey_enabled, self.minimize_to_tray)
+
+    def _handle_desktop_event(self, event: str) -> None:
+        if event == "show":
+            self._show_window()
+        elif event == "voice":
+            self._show_window()
+            self.root.after(150, self.start_voice_input)
+        elif event == "quit":
+            self._shutdown()
+
+    def _show_window(self) -> None:
+        self.root.deiconify()
+        self.root.overrideredirect(True)
+        self.root.lift()
+        self.root.focus_force()
 
     def _complete_command(self, response: str, context: str = "") -> None:
         self._add_message(response, sender="assistant", context=context)
@@ -1317,8 +1642,8 @@ class AccessGUI:
         if self.busy or self.listening:
             return
         self.listening = True
-        self.activity_label.configure(text="Listening…", fg=self.colors["accent"])
-        self.voice_button.configure(text="●", state="disabled")
+        self._start_listening_animation()
+        self.voice_button.configure(state="disabled")
         self.send_button.configure(state="disabled")
         self.command_entry.configure(state="disabled")
         threading.Thread(target=self._listen_for_voice, daemon=True).start()
@@ -1334,6 +1659,9 @@ class AccessGUI:
 
     def _complete_voice_input(self, succeeded: bool, message: str) -> None:
         self.listening = False
+        if self._listening_animation_job is not None:
+            self.root.after_cancel(self._listening_animation_job)
+            self._listening_animation_job = None
         self.voice_button.configure(text="🎤", state="normal")
         self.send_button.configure(state="normal")
         self.command_entry.configure(state="normal")
@@ -1346,6 +1674,24 @@ class AccessGUI:
         else:
             self._add_message(message, sender="assistant")
             self.command_entry.focus_set()
+
+    def _start_listening_animation(self) -> None:
+        """Pulse the microphone and listening label until capture completes."""
+
+        frames = (("●", "Listening"), ("◉", "Listening."), ("◎", "Listening.."), ("◉", "Listening..."))
+
+        def animate() -> None:
+            if not self.listening or not self.root.winfo_exists():
+                self._listening_animation_job = None
+                return
+            symbol, label = frames[self._listening_animation_frame % len(frames)]
+            self._listening_animation_frame += 1
+            self.voice_button.configure(text=symbol, fg=self.colors["accent"])
+            self.activity_label.configure(text=label, fg=self.colors["accent"])
+            self._listening_animation_job = self.root.after(240, animate)
+
+        self._listening_animation_frame = 0
+        animate()
 
     def toggle_voice_responses(self) -> None:
         self.voice_responses = not self.voice_responses
@@ -1800,8 +2146,11 @@ class AccessGUI:
             "  create file notes.txt  •  read file notes.txt\n"
             "  search file report  •  copy file A to B\n"
             "  move file A to B  •  rename file A to B\n"
+            "  remind me in 10 minutes to stretch\n"
+            "  show reminders  •  open settings\n"
             "  shutdown  •  restart  •  sleep\n\n"
-            "Shortcuts: Enter to send, Ctrl+K to focus, Ctrl+N for a new conversation, F1 for help."
+            "Shortcuts: Enter to send, Ctrl+K to focus, Ctrl+Shift+V to listen, "
+            "Ctrl+Alt+Space for global voice, Ctrl+N for a new conversation, F1 for help."
         )
         messagebox.showinfo("ACCESS commands", commands, parent=self.root)
 
@@ -1816,6 +2165,12 @@ class AccessGUI:
 
     def toggle_theme(self) -> None:
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
+        settings = self._read_settings()
+        settings["theme"] = self.theme_name
+        try:
+            self._write_settings(settings)
+        except OSError:
+            pass
         # Rebuilding is safer than recursively recoloring widgets with mixed roles.
         self.app_container.destroy()
         self.colors = THEMES[self.theme_name]
@@ -1886,14 +2241,31 @@ class AccessGUI:
         self.chat_canvas.update_idletasks()
         self.chat_canvas.yview_moveto(1.0)
 
-    def close(self) -> None:
+    def _request_close(self) -> None:
+        if self.minimize_to_tray and self.desktop.tray_available:
+            self.root.withdraw()
+            if self.notifications_enabled:
+                self.desktop.notify(
+                    "ACCESS is still running",
+                    "Use the tray icon or Ctrl+Alt+Space to return.",
+                )
+            return
+        self._shutdown()
+
+    def _shutdown(self) -> None:
         self.engine.running = False
         self.voice.stop()
+        self.desktop.stop()
         try:
             self.engine.memory.close()
         except Exception:
             pass
         self.root.destroy()
+
+    def close(self) -> None:
+        """Fully exit ACCESS (used by commands and the tray Quit action)."""
+
+        self._shutdown()
 
     def run(self) -> None:
         self.root.mainloop()

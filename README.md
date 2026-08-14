@@ -24,6 +24,8 @@ syntax-highlighted code responses, and locally stored conversation history.
 - Optionally use a local Ollama model for conversational fallback.
 - Speak commands through the microphone using offline recognition.
 - Read assistant responses aloud with the operating system's speech engine.
+- Schedule persistent reminders with desktop notifications.
+- Stay available in the system tray with a global voice shortcut.
 
 Some system controls depend on the operating system, desktop environment, and
 installed utilities. ACCESS reports when an operation is unavailable.
@@ -108,6 +110,25 @@ Select the microphone button beside **Send** to speak one command. The speaker
 button toggles spoken assistant responses. Voice recognition and speech output
 run locally; microphone availability and language support depend on the host
 operating system and installed audio devices.
+
+Open **Settings** from the sidebar to choose the microphone, system voice,
+speaking rate, volume, theme, reminder notifications, tray behavior, and global
+shortcut. When enabled, `Ctrl+Alt+Space` brings ACCESS forward and starts voice
+input even while another application is active.
+
+### Reminders
+
+ACCESS stores pending reminders locally and delivers them in the conversation
+and through a desktop notification. Examples:
+
+```text
+remind me in 10 minutes to check the oven
+remind me tomorrow at 9:30 AM to send the report
+show reminders
+cancel reminder a1b2c3d4
+```
+
+Use the identifier shown by `show reminders` when cancelling one.
 
 The commands `/help`, `?`, `/history`, and `/clear` are also supported.
 
