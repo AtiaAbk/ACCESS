@@ -22,6 +22,8 @@ syntax-highlighted code responses, and locally stored conversation history.
 - Switch between light and dark themes.
 - Run as a desktop GUI or classic terminal interface.
 - Optionally use a local Ollama model for conversational fallback.
+- Speak commands through the microphone using offline recognition.
+- Read assistant responses aloud with the operating system's speech engine.
 
 Some system controls depend on the operating system, desktop environment, and
 installed utilities. ACCESS reports when an operation is unavailable.
@@ -99,7 +101,13 @@ Conversation history is stored locally in
 | `Ctrl+K` or `Ctrl+L` | Focus the command input |
 | `Ctrl+N` | Start a new visible conversation |
 | `F1` | Show available commands |
+| `Ctrl+Shift+V` | Listen for a spoken command |
 | `Esc` | Return focus to the command input |
+
+Select the microphone button beside **Send** to speak one command. The speaker
+button toggles spoken assistant responses. Voice recognition and speech output
+run locally; microphone availability and language support depend on the host
+operating system and installed audio devices.
 
 The commands `/help`, `?`, `/history`, and `/clear` are also supported.
 

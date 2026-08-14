@@ -10,6 +10,7 @@ shown from the project root—the directory containing this file and
 - `pip`
 - Tkinter, which provides the native graphical interface
 - An active desktop session for screenshots and application launching
+- A microphone for voice commands
 - Git only if you are cloning the repository
 
 Check Python before continuing:
@@ -298,6 +299,17 @@ python -m pip install --upgrade Pygments
 ```
 
 ACCESS includes a smaller built-in highlighting fallback.
+
+### Voice input does not hear me
+
+Confirm that the operating system allows desktop applications to use the
+microphone and that the intended microphone is the default input device. ACCESS
+listens for up to five seconds for speech to begin. Select the microphone button
+again after changing device or privacy settings.
+
+Voice recognition uses the bundled offline PocketSphinx model. It works best
+with short commands in a quiet room. The speaker button beside **Send** controls
+whether assistant responses are read aloud.
 
 ### Reset Quick Actions manually
 

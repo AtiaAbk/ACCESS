@@ -23,6 +23,7 @@ from typing import Callable
 
 from core.engine import AccessEngine
 from ui.syntax_highlighter import HighlightedCode, highlight_code
+from voice import VoiceError, VoiceService
 
 
 APP_NAME = "ACCESS"
@@ -194,6 +195,7 @@ class AccessGUI:
         self._chat_rows: list[tk.Widget] = []
         self._image_refs: list[object] = []
         self._results: queue.Queue[tuple[str, str]] = queue.Queue()
+        self._voice_results: queue.Queue[tuple[bool, str]] = queue.Queue()
         available_fonts = set(tkfont.families(self.root))
         fluent_fonts = [
             name
@@ -211,6 +213,9 @@ class AccessGUI:
         )
         self.settings_path = self._settings_file()
         self.quick_action_items = self._load_quick_actions()
+        self.voice = VoiceService()
+        self.voice_responses = self._load_voice_response_setting()
+        self.listening = False
 
         self.root.title(f"{APP_NAME} — Desktop Assistant")
         initial_geometry, initial_size = self._initial_window_geometry()
@@ -604,10 +609,26 @@ class AccessGUI:
             if (action := self._catalog_action(action_id)) is not None
         ]
 
-    def _load_quick_actions(self) -> list[dict]:
+    def _read_settings(self) -> dict:
         try:
             data = json.loads(self.settings_path.read_text(encoding="utf-8"))
-            stored_actions = data.get("quick_actions", [])
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
+
+    def _write_settings(self, data: dict) -> None:
+        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+        self.settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _load_voice_response_setting(self) -> bool:
+        return bool(self._read_settings().get("voice_responses", True))
+
+    def _load_quick_actions(self) -> list[dict]:
+        try:
+            data = self._read_settings()
+            stored_actions = data.get("quick_actions")
+            if stored_actions is None:
+                return self._default_quick_actions()
             if not isinstance(stored_actions, list):
                 raise ValueError("quick_actions must be a list")
         except (OSError, ValueError, json.JSONDecodeError):
@@ -639,8 +660,8 @@ class AccessGUI:
         return actions
 
     def _save_quick_actions(self, actions: list[dict]) -> bool:
-        payload = {
-            "quick_actions": [
+        payload = self._read_settings()
+        payload["quick_actions"] = [
                 {
                     "id": action["id"],
                     **(
@@ -651,13 +672,8 @@ class AccessGUI:
                 }
                 for action in actions
             ]
-        }
         try:
-            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
-            self.settings_path.write_text(
-                json.dumps(payload, indent=2),
-                encoding="utf-8",
-            )
+            self._write_settings(payload)
             return True
         except OSError as error:
             messagebox.showerror(
@@ -1137,6 +1153,38 @@ class AccessGUI:
             cursor="hand2",
         )
         self.send_button.pack(side="right", padx=18, pady=14)
+        self.voice_button = tk.Button(
+            composer,
+            text="🎤",
+            command=self.start_voice_input,
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=12,
+            bg=c["surface_2"],
+            activebackground=c["border"],
+            fg=c["accent"],
+            activeforeground=c["accent"],
+            font=("Segoe UI Emoji", 13),
+            cursor="hand2",
+        )
+        self.voice_button.pack(side="right", padx=(0, 4), pady=14)
+        self.voice_output_button = tk.Button(
+            composer,
+            text="🔊" if self.voice_responses else "🔇",
+            command=self.toggle_voice_responses,
+            relief="flat",
+            bd=0,
+            padx=10,
+            pady=12,
+            bg=c["input"],
+            activebackground=c["surface_2"],
+            fg=c["muted"],
+            activeforeground=c["text"],
+            font=("Segoe UI Emoji", 12),
+            cursor="hand2",
+        )
+        self.voice_output_button.pack(side="right", padx=(4, 6), pady=14)
 
     def _status_card(self, parent: tk.Widget, icon: str, label: str, value: str, color: str) -> None:
         c = self.colors
@@ -1176,9 +1224,12 @@ class AccessGUI:
         self.root.bind("<Control-k>", lambda _event: self.command_entry.focus_set())
         self.root.bind("<Control-n>", lambda _event: self.clear_conversation())
         self.root.bind("<F1>", lambda _event: self.show_help())
+        self.root.bind("<Control-Shift-v>", lambda _event: self.start_voice_input())
         self.root.bind("<Escape>", lambda _event: self.command_entry.focus_set())
 
     def submit_from_entry(self) -> None:
+        if self.listening:
+            return
         command = self.command_entry.get().strip()
         if command == "Type your message...":
             return
@@ -1202,10 +1253,13 @@ class AccessGUI:
             return
         if command_lower == "status":
             self._add_message(command, sender="user")
-            self._add_message(
-                f"System online. Engine ready in offline-first mode on {platform.system() or os.name}.",
-                sender="assistant",
+            response = (
+                f"System online. Engine ready in offline-first mode on "
+                f"{platform.system() or os.name}."
             )
+            self._add_message(response, sender="assistant")
+            if self.voice_responses:
+                self.voice.speak(response)
             return
         if command_lower == "about":
             messagebox.showinfo(
@@ -1235,11 +1289,19 @@ class AccessGUI:
                 self._complete_command(response, context=command)
         except queue.Empty:
             pass
+        try:
+            while True:
+                succeeded, message = self._voice_results.get_nowait()
+                self._complete_voice_input(succeeded, message)
+        except queue.Empty:
+            pass
         if self.root.winfo_exists():
             self.root.after(50, self._poll_results)
 
     def _complete_command(self, response: str, context: str = "") -> None:
         self._add_message(response, sender="assistant", context=context)
+        if self.voice_responses:
+            self.voice.speak(response)
         self._set_busy(False)
         if self.engine.pending_action:
             action = str(self.engine.pending_action).replace("_", " ").title()
@@ -1249,10 +1311,65 @@ class AccessGUI:
             self.root.after(700, self.close)
         self.command_entry.focus_set()
 
+    def start_voice_input(self) -> None:
+        """Listen for one spoken command without blocking tkinter."""
+
+        if self.busy or self.listening:
+            return
+        self.listening = True
+        self.activity_label.configure(text="Listening…", fg=self.colors["accent"])
+        self.voice_button.configure(text="●", state="disabled")
+        self.send_button.configure(state="disabled")
+        self.command_entry.configure(state="disabled")
+        threading.Thread(target=self._listen_for_voice, daemon=True).start()
+
+    def _listen_for_voice(self) -> None:
+        try:
+            transcript = self.voice.listen()
+            self._voice_results.put((True, transcript))
+        except VoiceError as error:
+            self._voice_results.put((False, str(error)))
+        except Exception as error:
+            self._voice_results.put((False, f"Voice input failed: {error}"))
+
+    def _complete_voice_input(self, succeeded: bool, message: str) -> None:
+        self.listening = False
+        self.voice_button.configure(text="🎤", state="normal")
+        self.send_button.configure(state="normal")
+        self.command_entry.configure(state="normal")
+        self.activity_label.configure(text="Ready", fg=self.colors["muted"])
+        if succeeded:
+            self.command_entry.delete(0, "end")
+            self.command_entry.configure(fg=self.colors["text"])
+            self.command_entry.insert(0, message)
+            self.submit_from_entry()
+        else:
+            self._add_message(message, sender="assistant")
+            self.command_entry.focus_set()
+
+    def toggle_voice_responses(self) -> None:
+        self.voice_responses = not self.voice_responses
+        if not self.voice_responses:
+            self.voice.stop()
+        self.voice_output_button.configure(
+            text="🔊" if self.voice_responses else "🔇"
+        )
+        settings = self._read_settings()
+        settings["voice_responses"] = self.voice_responses
+        try:
+            self._write_settings(settings)
+        except OSError as error:
+            messagebox.showerror(
+                "Unable to save voice setting",
+                f"ACCESS could not save the voice setting:\n{error}",
+                parent=self.root,
+            )
+
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
         self.activity_label.configure(text="ACCESS is thinking…" if busy else "Ready", fg=self.colors["accent"] if busy else self.colors["muted"])
         self.send_button.configure(state="disabled" if busy else "normal")
+        self.voice_button.configure(state="disabled" if busy else "normal")
         self.command_entry.configure(state="disabled" if busy else "normal")
 
     def _add_welcome_message(self) -> None:
@@ -1771,6 +1888,7 @@ class AccessGUI:
 
     def close(self) -> None:
         self.engine.running = False
+        self.voice.stop()
         try:
             self.engine.memory.close()
         except Exception:
