@@ -29,6 +29,10 @@ APP_NAME = "ACCESS"
 APP_SUBTITLE = "Adaptive Cognitive Companion for Efficient System Services"
 VERSION = "1.0"
 
+DEFAULT_WINDOW_SIZE = (1680, 945)
+MINIMUM_WINDOW_SIZE = (960, 600)
+WINDOW_MARGIN = (64, 48)
+
 
 QUICK_ACTION_CATALOG = {
     "screenshot": {"icon": "\ue722", "label": "Screenshot", "kind": "command", "value": "take a screenshot"},
@@ -209,15 +213,19 @@ class AccessGUI:
         self.quick_action_items = self._load_quick_actions()
 
         self.root.title(f"{APP_NAME} — Desktop Assistant")
-        self.root.geometry("1680x945")
-        self.root.minsize(1180, 720)
+        initial_geometry, initial_size = self._initial_window_geometry()
+        self.root.geometry(initial_geometry)
+        self.root.minsize(
+            min(MINIMUM_WINDOW_SIZE[0], initial_size[0]),
+            min(MINIMUM_WINDOW_SIZE[1], initial_size[1]),
+        )
         self.root.overrideredirect(True)
         self.root.configure(bg=self.colors["bg"])
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.app_icon = self._create_app_icon()
         self.root.iconphoto(True, self.app_icon)
         self._drag_origin = (0, 0)
-        self._restore_geometry = "1680x945+40+40"
+        self._restore_geometry = initial_geometry
         self._is_maximized = False
 
         self._configure_styles()
@@ -226,6 +234,44 @@ class AccessGUI:
         self._add_welcome_message()
         self.root.after(50, self._poll_results)
         self.command_entry.focus_set()
+
+    def _work_area(self) -> tuple[int, int, int, int]:
+        """Return the usable desktop area as ``left, top, width, height``."""
+
+        if platform.system() == "Windows":
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                work_area = wintypes.RECT()
+                # SPI_GETWORKAREA excludes the taskbar and docked toolbars.
+                if ctypes.windll.user32.SystemParametersInfoW(
+                    0x0030, 0, ctypes.byref(work_area), 0
+                ):
+                    return (
+                        work_area.left,
+                        work_area.top,
+                        work_area.right - work_area.left,
+                        work_area.bottom - work_area.top,
+                    )
+            except (AttributeError, OSError):
+                pass
+
+        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+
+    def _initial_window_geometry(self) -> tuple[str, tuple[int, int]]:
+        """Fit and center the default window within the usable desktop area."""
+
+        left, top, work_width, work_height = self._work_area()
+        margin_x, margin_y = WINDOW_MARGIN
+        window_width = min(DEFAULT_WINDOW_SIZE[0], max(1, work_width - margin_x))
+        window_height = min(DEFAULT_WINDOW_SIZE[1], max(1, work_height - margin_y))
+        x = left + max(0, (work_width - window_width) // 2)
+        y = top + max(0, (work_height - window_height) // 2)
+        return (
+            f"{window_width}x{window_height}+{x}+{y}",
+            (window_width, window_height),
+        )
 
     # ------------------------------------------------------------------ layout
     def _configure_styles(self) -> None:
@@ -353,9 +399,8 @@ class AccessGUI:
             self._is_maximized = False
             return
         self._restore_geometry = self.root.geometry()
-        width = self.root.winfo_screenwidth()
-        height = self.root.winfo_screenheight()
-        self.root.geometry(f"{width}x{height}+0+0")
+        left, top, width, height = self._work_area()
+        self.root.geometry(f"{width}x{height}+{left}+{top}")
         self._is_maximized = True
 
     def _minimize_window(self) -> None:
