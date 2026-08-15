@@ -10,6 +10,7 @@ shown from the project root—the directory containing this file and
 - `pip`
 - Tkinter, which provides the native graphical interface
 - An active desktop session for screenshots and application launching
+- A microphone for voice commands
 - Git only if you are cloning the repository
 
 Check Python before continuing:
@@ -298,6 +299,43 @@ python -m pip install --upgrade Pygments
 ```
 
 ACCESS includes a smaller built-in highlighting fallback.
+
+### Voice input does not hear me
+
+Confirm that the operating system allows desktop applications to use the
+microphone and that the intended microphone is the default input device. ACCESS
+listens for up to five seconds for speech to begin. Select the microphone button
+again after changing device or privacy settings.
+
+Voice recognition uses the bundled offline PocketSphinx model. It works best
+with short commands in a quiet room. The speaker button beside **Send** controls
+whether assistant responses are read aloud.
+
+### Tray icon or global shortcut is unavailable
+
+Open **Settings** and confirm that tray mode and the global shortcut are enabled.
+The shortcut is `Ctrl+Alt+Space`. Linux desktop environments may require a tray
+extension, and macOS may request Accessibility permission for global keyboard
+monitoring. ACCESS continues to work normally when either integration is
+unavailable.
+
+### Reminder notifications do not appear
+
+Enable notifications in **Settings** and verify that the operating system allows
+Python or ACCESS to send notifications. Pending reminders remain stored locally
+and will still appear inside the ACCESS conversation when they become due.
+
+### Dashboard metrics are unavailable
+
+Reinstall the project requirements to restore the cross-platform system monitor:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Battery information displays as unavailable on desktop computers or platforms
+that do not expose a battery sensor. Network speed begins calculating after the
+first pair of dashboard samples.
 
 ### Reset Quick Actions manually
 

@@ -1,4 +1,4 @@
-from ACCESS.ai.decision_engine import AIDecisionEngine
+from ai.decision_engine import AIDecisionEngine
 
 engine = AIDecisionEngine()
 

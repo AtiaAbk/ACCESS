@@ -22,12 +22,25 @@ from tkinter import messagebox, simpledialog, ttk
 from typing import Callable
 
 from core.engine import AccessEngine
+from app.desktop_integration import DesktopIntegration
+from app.reminders import ReminderService
+from app.system_monitor import (
+    SystemMonitor,
+    SystemSnapshot,
+    format_bytes,
+    format_duration,
+)
 from ui.syntax_highlighter import HighlightedCode, highlight_code
+from voice import VoiceError, VoiceService
 
 
 APP_NAME = "ACCESS"
 APP_SUBTITLE = "Adaptive Cognitive Companion for Efficient System Services"
 VERSION = "1.0"
+
+DEFAULT_WINDOW_SIZE = (1680, 945)
+MINIMUM_WINDOW_SIZE = (960, 600)
+WINDOW_MARGIN = (64, 48)
 
 
 QUICK_ACTION_CATALOG = {
@@ -184,12 +197,28 @@ class AccessGUI:
                 pass
         self.root = root or tk.Tk()
         self.engine = engine or AccessEngine()
-        self.theme_name = "dark"
+        self.settings_path = self._settings_file()
+        startup_settings = self._read_settings()
+        self.theme_name = str(startup_settings.get("theme", "dark"))
+        if self.theme_name not in THEMES:
+            self.theme_name = "dark"
         self.colors = THEMES[self.theme_name]
         self.busy = False
+        self.listening = False
+        self._listening_animation_job: str | None = None
+        self._listening_animation_frame = 0
         self._chat_rows: list[tk.Widget] = []
         self._image_refs: list[object] = []
         self._results: queue.Queue[tuple[str, str]] = queue.Queue()
+        self._voice_results: queue.Queue[tuple[bool, str]] = queue.Queue()
+        self._desktop_events: queue.Queue[str] = queue.Queue()
+        self._dashboard_results: queue.Queue[
+            tuple[int, SystemSnapshot | Exception]
+        ] = queue.Queue()
+        self._dashboard_window: tk.Toplevel | None = None
+        self._dashboard_generation = 0
+        self._dashboard_refreshing = False
+        self._dashboard_widgets: dict[str, dict[str, object]] = {}
         available_fonts = set(tkfont.families(self.root))
         fluent_fonts = [
             name
@@ -205,19 +234,57 @@ class AccessGUI:
                 "TkDefaultFont",
             )
         )
-        self.settings_path = self._settings_file()
         self.quick_action_items = self._load_quick_actions()
+        voice_settings = startup_settings.get("voice", {})
+        if not isinstance(voice_settings, dict):
+            voice_settings = {}
+        try:
+            voice_rate = int(voice_settings.get("rate", 185))
+            voice_volume = float(voice_settings.get("volume", 1.0))
+            microphone_value = voice_settings.get("microphone_index")
+            microphone_index = (
+                int(microphone_value) if microphone_value is not None else None
+            )
+        except (TypeError, ValueError):
+            voice_rate, voice_volume, microphone_index = 185, 1.0, None
+        self.voice = VoiceService(
+            language=str(voice_settings.get("language", "en-US")),
+            rate=voice_rate,
+            volume=voice_volume,
+            voice_id=voice_settings.get("voice_id") or None,
+            microphone_index=microphone_index,
+        )
+        self.voice_responses = bool(
+            voice_settings.get(
+                "responses_enabled",
+                startup_settings.get("voice_responses", True),
+            )
+        )
+        self.notifications_enabled = bool(
+            startup_settings.get("notifications_enabled", True)
+        )
+        self.minimize_to_tray = bool(startup_settings.get("minimize_to_tray", True))
+        self.global_hotkey_enabled = bool(
+            startup_settings.get("global_hotkey_enabled", True)
+        )
+        self.reminders = ReminderService(self.settings_path.with_name("reminders.json"))
+        self.desktop = DesktopIntegration(self._desktop_events.put)
+        self.system_monitor = SystemMonitor()
 
         self.root.title(f"{APP_NAME} — Desktop Assistant")
-        self.root.geometry("1680x945")
-        self.root.minsize(1180, 720)
+        initial_geometry, initial_size = self._initial_window_geometry()
+        self.root.geometry(initial_geometry)
+        self.root.minsize(
+            min(MINIMUM_WINDOW_SIZE[0], initial_size[0]),
+            min(MINIMUM_WINDOW_SIZE[1], initial_size[1]),
+        )
         self.root.overrideredirect(True)
         self.root.configure(bg=self.colors["bg"])
-        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.protocol("WM_DELETE_WINDOW", self._request_close)
         self.app_icon = self._create_app_icon()
         self.root.iconphoto(True, self.app_icon)
         self._drag_origin = (0, 0)
-        self._restore_geometry = "1680x945+40+40"
+        self._restore_geometry = initial_geometry
         self._is_maximized = False
 
         self._configure_styles()
@@ -225,7 +292,47 @@ class AccessGUI:
         self._bind_shortcuts()
         self._add_welcome_message()
         self.root.after(50, self._poll_results)
+        self.root.after(250, self._poll_reminders)
+        self.root.after(100, self._start_desktop_integrations)
         self.command_entry.focus_set()
+
+    def _work_area(self) -> tuple[int, int, int, int]:
+        """Return the usable desktop area as ``left, top, width, height``."""
+
+        if platform.system() == "Windows":
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                work_area = wintypes.RECT()
+                # SPI_GETWORKAREA excludes the taskbar and docked toolbars.
+                if ctypes.windll.user32.SystemParametersInfoW(
+                    0x0030, 0, ctypes.byref(work_area), 0
+                ):
+                    return (
+                        work_area.left,
+                        work_area.top,
+                        work_area.right - work_area.left,
+                        work_area.bottom - work_area.top,
+                    )
+            except (AttributeError, OSError):
+                pass
+
+        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+
+    def _initial_window_geometry(self) -> tuple[str, tuple[int, int]]:
+        """Fit and center the default window within the usable desktop area."""
+
+        left, top, work_width, work_height = self._work_area()
+        margin_x, margin_y = WINDOW_MARGIN
+        window_width = min(DEFAULT_WINDOW_SIZE[0], max(1, work_width - margin_x))
+        window_height = min(DEFAULT_WINDOW_SIZE[1], max(1, work_height - margin_y))
+        x = left + max(0, (work_width - window_width) // 2)
+        y = top + max(0, (work_height - window_height) // 2)
+        return (
+            f"{window_width}x{window_height}+{x}+{y}",
+            (window_width, window_height),
+        )
 
     # ------------------------------------------------------------------ layout
     def _configure_styles(self) -> None:
@@ -327,7 +434,7 @@ class AccessGUI:
             button.pack(side="right", fill="y")
             return button
 
-        control("×", self.close, danger=True)
+        control("×", self._request_close, danger=True)
         control("□", self._toggle_maximize)
         control("—", self._minimize_window)
         for widget in (titlebar, title, icon):
@@ -353,9 +460,8 @@ class AccessGUI:
             self._is_maximized = False
             return
         self._restore_geometry = self.root.geometry()
-        width = self.root.winfo_screenwidth()
-        height = self.root.winfo_screenheight()
-        self.root.geometry(f"{width}x{height}+0+0")
+        left, top, width, height = self._work_area()
+        self.root.geometry(f"{width}x{height}+{left}+{top}")
         self._is_maximized = True
 
     def _minimize_window(self) -> None:
@@ -416,9 +522,11 @@ class AccessGUI:
         ).pack(anchor="w", padx=34, pady=(0, 8))
 
         self._nav_button("✦", "Assistant", lambda: self.command_entry.focus_set(), active=True)
+        self._nav_button("▦", "Dashboard", self.show_system_dashboard)
         self._nav_button("↻", "New conversation", self.clear_conversation)
         self._nav_button("◷", "History", self.show_history)
         self._nav_button("?", "Commands", self.show_help)
+        self._nav_button("⚙", "Settings", self.show_settings)
 
         bottom = tk.Frame(self.sidebar, bg=c["sidebar"])
         bottom.pack(side="bottom", fill="x", padx=22, pady=(8, 34))
@@ -559,10 +667,26 @@ class AccessGUI:
             if (action := self._catalog_action(action_id)) is not None
         ]
 
-    def _load_quick_actions(self) -> list[dict]:
+    def _read_settings(self) -> dict:
         try:
             data = json.loads(self.settings_path.read_text(encoding="utf-8"))
-            stored_actions = data.get("quick_actions", [])
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
+
+    def _write_settings(self, data: dict) -> None:
+        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+        self.settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _load_voice_response_setting(self) -> bool:
+        return bool(self._read_settings().get("voice_responses", True))
+
+    def _load_quick_actions(self) -> list[dict]:
+        try:
+            data = self._read_settings()
+            stored_actions = data.get("quick_actions")
+            if stored_actions is None:
+                return self._default_quick_actions()
             if not isinstance(stored_actions, list):
                 raise ValueError("quick_actions must be a list")
         except (OSError, ValueError, json.JSONDecodeError):
@@ -594,8 +718,8 @@ class AccessGUI:
         return actions
 
     def _save_quick_actions(self, actions: list[dict]) -> bool:
-        payload = {
-            "quick_actions": [
+        payload = self._read_settings()
+        payload["quick_actions"] = [
                 {
                     "id": action["id"],
                     **(
@@ -606,13 +730,8 @@ class AccessGUI:
                 }
                 for action in actions
             ]
-        }
         try:
-            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
-            self.settings_path.write_text(
-                json.dumps(payload, indent=2),
-                encoding="utf-8",
-            )
+            self._write_settings(payload)
             return True
         except OSError as error:
             messagebox.showerror(
@@ -634,6 +753,594 @@ class AccessGUI:
         handler = handlers.get(str(action.get("value", "")))
         if handler:
             handler()
+
+    def show_system_dashboard(self) -> None:
+        """Show a live, read-only overview of system health and identity."""
+
+        if self._dashboard_window and self._dashboard_window.winfo_exists():
+            self._dashboard_window.deiconify()
+            self._dashboard_window.lift()
+            self._dashboard_window.focus_force()
+            return
+
+        c = self.colors
+        window = tk.Toplevel(self.root)
+        self._dashboard_window = window
+        self._dashboard_generation += 1
+        self._dashboard_refreshing = False
+        self._dashboard_widgets = {}
+        left, top, work_width, work_height = self._work_area()
+        width = min(1050, max(1, work_width - 80))
+        height = min(720, max(1, work_height - 70))
+        x = left + max(0, (work_width - width) // 2)
+        y = top + max(0, (work_height - height) // 2)
+        window.title("ACCESS — System Dashboard")
+        window.geometry(f"{width}x{height}+{x}+{y}")
+        window.minsize(min(760, width), min(560, height))
+        window.configure(bg=c["bg"])
+        window.transient(self.root)
+        window.protocol("WM_DELETE_WINDOW", self._close_system_dashboard)
+
+        header = tk.Frame(window, bg=c["bg"])
+        header.pack(fill="x", padx=30, pady=(24, 16))
+        title_box = tk.Frame(header, bg=c["bg"])
+        title_box.pack(side="left")
+        tk.Label(
+            title_box,
+            text="System Dashboard",
+            bg=c["bg"],
+            fg=c["text"],
+            font=("Segoe UI", 21, "bold"),
+        ).pack(anchor="w")
+        self.dashboard_status_label = tk.Label(
+            title_box,
+            text="Collecting system information…",
+            bg=c["bg"],
+            fg=c["muted"],
+            font=("Segoe UI", 9),
+        )
+        self.dashboard_status_label.pack(anchor="w", pady=(4, 0))
+        tk.Button(
+            header,
+            text="Refresh",
+            command=self._request_dashboard_refresh,
+            relief="flat",
+            bd=0,
+            padx=18,
+            pady=9,
+            bg=c["surface_2"],
+            activebackground=c["border"],
+            fg=c["text"],
+            activeforeground=c["text"],
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+        ).pack(side="right")
+
+        cards = tk.Frame(window, bg=c["bg"])
+        cards.pack(fill="x", padx=30)
+        for column in range(3):
+            cards.columnconfigure(column, weight=1, uniform="dashboard")
+        self._dashboard_metric_card(cards, "cpu", "CPU", "Processor utilization", c["accent"], 0, 0)
+        self._dashboard_metric_card(cards, "memory", "MEMORY", "Physical memory", c["blue"], 0, 1)
+        self._dashboard_metric_card(cards, "disk", "STORAGE", "System drive", "#A78BFA", 0, 2)
+        self._dashboard_metric_card(cards, "battery", "BATTERY", "Power status", "#F59E0B", 1, 0)
+        self._dashboard_metric_card(
+            cards,
+            "network",
+            "NETWORK",
+            "Live transfer rate",
+            c["success"],
+            1,
+            1,
+            columnspan=2,
+            progress=False,
+        )
+
+        lower = tk.Frame(window, bg=c["bg"])
+        lower.pack(fill="both", expand=True, padx=30, pady=(16, 26))
+        lower.columnconfigure(0, weight=3)
+        lower.columnconfigure(1, weight=2)
+        lower.rowconfigure(0, weight=1)
+
+        device_panel = tk.Frame(
+            lower,
+            bg=c["surface"],
+            highlightthickness=1,
+            highlightbackground=c["border"],
+        )
+        device_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        tk.Label(
+            device_panel,
+            text="DEVICE INFORMATION",
+            bg=c["surface"],
+            fg=c["accent"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", padx=20, pady=(16, 10))
+        self.dashboard_device_labels: dict[str, tk.Label] = {}
+        for key, label_text in (
+            ("device", "Device name"),
+            ("os", "Operating system"),
+            ("uptime", "Uptime"),
+            ("ip", "Local IP"),
+        ):
+            row = tk.Frame(device_panel, bg=c["surface"])
+            row.pack(fill="x", padx=20, pady=5)
+            tk.Label(
+                row,
+                text=label_text,
+                width=17,
+                anchor="w",
+                bg=c["surface"],
+                fg=c["muted"],
+                font=("Segoe UI", 9),
+            ).pack(side="left")
+            value_label = tk.Label(
+                row,
+                text="—",
+                anchor="w",
+                bg=c["surface"],
+                fg=c["text"],
+                font=("Segoe UI", 10, "bold"),
+            )
+            value_label.pack(side="left", fill="x", expand=True)
+            self.dashboard_device_labels[key] = value_label
+
+        warning_panel = tk.Frame(
+            lower,
+            bg=c["surface"],
+            highlightthickness=1,
+            highlightbackground=c["border"],
+        )
+        warning_panel.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        tk.Label(
+            warning_panel,
+            text="SYSTEM HEALTH",
+            bg=c["surface"],
+            fg=c["accent"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", padx=20, pady=(16, 10))
+        self.dashboard_warning_label = tk.Label(
+            warning_panel,
+            text="Checking system health…",
+            justify="left",
+            anchor="nw",
+            wraplength=300,
+            bg=c["surface"],
+            fg=c["muted"],
+            font=("Segoe UI", 10),
+        )
+        self.dashboard_warning_label.pack(fill="both", expand=True, padx=20, pady=(0, 16))
+
+        self._request_dashboard_refresh()
+
+    def _dashboard_metric_card(
+        self,
+        parent: tk.Widget,
+        key: str,
+        title: str,
+        subtitle: str,
+        color: str,
+        row: int,
+        column: int,
+        *,
+        columnspan: int = 1,
+        progress: bool = True,
+    ) -> None:
+        c = self.colors
+        card = tk.Frame(
+            parent,
+            height=128,
+            bg=c["surface"],
+            highlightthickness=1,
+            highlightbackground=c["border"],
+        )
+        card.grid(
+            row=row,
+            column=column,
+            columnspan=columnspan,
+            sticky="nsew",
+            padx=6,
+            pady=6,
+        )
+        card.grid_propagate(False)
+        accent = tk.Frame(card, width=4, bg=color)
+        accent.pack(side="left", fill="y")
+        body = tk.Frame(card, bg=c["surface"])
+        body.pack(side="left", fill="both", expand=True, padx=16, pady=12)
+        tk.Label(
+            body,
+            text=title,
+            bg=c["surface"],
+            fg=c["muted"],
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w")
+        value = tk.Label(
+            body,
+            text="—",
+            bg=c["surface"],
+            fg=c["text"],
+            font=("Segoe UI", 20, "bold"),
+        )
+        value.pack(anchor="w", pady=(3, 0))
+        detail = tk.Label(
+            body,
+            text=subtitle,
+            bg=c["surface"],
+            fg=c["muted"],
+            font=("Segoe UI", 8),
+        )
+        detail.pack(anchor="w", pady=(2, 0))
+        meter = None
+        meter_bar = None
+        if progress:
+            meter = tk.Canvas(body, height=6, bg=c["surface_2"], bd=0, highlightthickness=0)
+            meter.pack(fill="x", pady=(8, 0))
+            meter_bar = meter.create_rectangle(0, 0, 0, 6, fill=color, outline="")
+        self._dashboard_widgets[key] = {
+            "value": value,
+            "detail": detail,
+            "meter": meter,
+            "bar": meter_bar,
+            "color": color,
+        }
+
+    def _request_dashboard_refresh(self) -> None:
+        if (
+            self._dashboard_refreshing
+            or self._dashboard_window is None
+            or not self._dashboard_window.winfo_exists()
+        ):
+            return
+        self._dashboard_refreshing = True
+        self.dashboard_status_label.configure(
+            text="Updating…",
+            fg=self.colors["accent"],
+        )
+        generation = self._dashboard_generation
+        threading.Thread(
+            target=self._collect_dashboard_snapshot,
+            args=(generation,),
+            name="access-system-monitor",
+            daemon=True,
+        ).start()
+
+    def _collect_dashboard_snapshot(self, generation: int) -> None:
+        try:
+            result: SystemSnapshot | Exception = self.system_monitor.snapshot()
+        except Exception as error:
+            result = error
+        self._dashboard_results.put((generation, result))
+
+    def _complete_dashboard_refresh(
+        self,
+        generation: int,
+        result: SystemSnapshot | Exception,
+    ) -> None:
+        window = self._dashboard_window
+        if (
+            generation != self._dashboard_generation
+            or window is None
+            or not window.winfo_exists()
+        ):
+            return
+        self._dashboard_refreshing = False
+        if isinstance(result, Exception):
+            self.dashboard_status_label.configure(
+                text=f"Unable to refresh: {result}",
+                fg=self.colors["danger"],
+            )
+        else:
+            self._apply_dashboard_snapshot(result)
+        window.after(2000, self._request_dashboard_refresh)
+
+    def _apply_dashboard_snapshot(self, snapshot: SystemSnapshot) -> None:
+        values = {
+            "cpu": (f"{snapshot.cpu_percent:.0f}%", "Current processor utilization"),
+            "memory": (
+                f"{snapshot.memory_percent:.0f}%",
+                f"{format_bytes(snapshot.memory_used)} of {format_bytes(snapshot.memory_total)} used",
+            ),
+            "disk": (
+                f"{snapshot.disk_percent:.0f}%",
+                f"{format_bytes(snapshot.disk_used)} of {format_bytes(snapshot.disk_total)} used",
+            ),
+        }
+        if snapshot.battery_percent is None:
+            values["battery"] = ("—", "Battery not detected")
+        else:
+            power = "Charging" if snapshot.battery_plugged else format_duration(snapshot.battery_seconds_left) + " remaining"
+            values["battery"] = (f"{snapshot.battery_percent:.0f}%", power)
+        values["network"] = (
+            f"↓ {format_bytes(snapshot.network_download_rate)}/s   ↑ {format_bytes(snapshot.network_upload_rate)}/s",
+            f"Session totals: ↓ {format_bytes(snapshot.network_received)}   ↑ {format_bytes(snapshot.network_sent)}",
+        )
+        percentages = {
+            "cpu": snapshot.cpu_percent,
+            "memory": snapshot.memory_percent,
+            "disk": snapshot.disk_percent,
+            "battery": snapshot.battery_percent or 0,
+        }
+        for key, (value_text, detail_text) in values.items():
+            widgets = self._dashboard_widgets[key]
+            widgets["value"].configure(text=value_text)
+            widgets["detail"].configure(text=detail_text)
+            meter = widgets["meter"]
+            bar = widgets["bar"]
+            if meter is not None and bar is not None:
+                meter.update_idletasks()
+                width = max(1, meter.winfo_width())
+                percent = max(0.0, min(100.0, percentages[key]))
+                meter.coords(bar, 0, 0, width * percent / 100, 6)
+                warning = percent >= 90 or (
+                    key == "battery"
+                    and snapshot.battery_percent is not None
+                    and snapshot.battery_percent <= 15
+                    and not snapshot.battery_plugged
+                )
+                meter.itemconfigure(
+                    bar,
+                    fill=self.colors["danger"] if warning else widgets["color"],
+                )
+
+        self.dashboard_device_labels["device"].configure(text=snapshot.device_name)
+        self.dashboard_device_labels["os"].configure(text=snapshot.os_version)
+        self.dashboard_device_labels["uptime"].configure(text=format_duration(snapshot.uptime_seconds))
+        self.dashboard_device_labels["ip"].configure(text=snapshot.local_ip)
+        if snapshot.warnings:
+            warning_text = "\n\n".join(f"⚠ {warning}" for warning in snapshot.warnings)
+            self.dashboard_warning_label.configure(
+                text=warning_text,
+                fg=self.colors["danger"],
+            )
+        else:
+            self.dashboard_warning_label.configure(
+                text="✓ Everything looks healthy. No resource warnings detected.",
+                fg=self.colors["success"],
+            )
+        sampled = datetime.fromtimestamp(snapshot.sampled_at).strftime("%I:%M:%S %p")
+        self.dashboard_status_label.configure(
+            text=f"Updated {sampled}  •  Refreshes every 2 seconds",
+            fg=self.colors["muted"],
+        )
+
+    def _close_system_dashboard(self) -> None:
+        self._dashboard_generation += 1
+        self._dashboard_refreshing = False
+        if self._dashboard_window and self._dashboard_window.winfo_exists():
+            self._dashboard_window.destroy()
+        self._dashboard_window = None
+        self._dashboard_widgets = {}
+
+    def show_settings(self) -> None:
+        """Open the central application, voice, and desktop settings window."""
+
+        c = self.colors
+        dialog = tk.Toplevel(self.root)
+        dialog.title("ACCESS — Settings")
+        dialog.geometry("720x620")
+        dialog.minsize(640, 560)
+        dialog.configure(bg=c["bg"])
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        header = tk.Frame(dialog, bg=c["bg"])
+        header.pack(fill="x", padx=30, pady=(26, 18))
+        tk.Label(
+            header,
+            text="Settings",
+            bg=c["bg"],
+            fg=c["text"],
+            font=("Segoe UI", 21, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            header,
+            text="Personalize ACCESS and choose how it integrates with your desktop.",
+            bg=c["bg"],
+            fg=c["muted"],
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(4, 0))
+
+        content = tk.Frame(dialog, bg=c["surface"], highlightthickness=1, highlightbackground=c["border"])
+        content.pack(fill="both", expand=True, padx=30)
+        content.columnconfigure(1, weight=1)
+
+        def section(text: str, row: int) -> int:
+            tk.Label(
+                content,
+                text=text,
+                bg=c["surface"],
+                fg=c["accent"],
+                font=("Segoe UI", 9, "bold"),
+            ).grid(row=row, column=0, columnspan=2, sticky="w", padx=22, pady=(18, 8))
+            return row + 1
+
+        def label(text: str, row: int) -> None:
+            tk.Label(
+                content,
+                text=text,
+                bg=c["surface"],
+                fg=c["text"],
+                font=("Segoe UI", 10),
+            ).grid(row=row, column=0, sticky="w", padx=(22, 16), pady=7)
+
+        def check(text: str, variable: tk.BooleanVar, row: int) -> None:
+            tk.Checkbutton(
+                content,
+                text=text,
+                variable=variable,
+                bg=c["surface"],
+                activebackground=c["surface"],
+                fg=c["text"],
+                activeforeground=c["text"],
+                selectcolor=c["surface_2"],
+                font=("Segoe UI", 10),
+            ).grid(row=row, column=0, columnspan=2, sticky="w", padx=18, pady=5)
+
+        theme_var = tk.StringVar(value=self.theme_name.title())
+        responses_var = tk.BooleanVar(value=self.voice_responses)
+        notifications_var = tk.BooleanVar(value=self.notifications_enabled)
+        tray_var = tk.BooleanVar(value=self.minimize_to_tray)
+        hotkey_var = tk.BooleanVar(value=self.global_hotkey_enabled)
+        rate_var = tk.IntVar(value=self.voice.rate)
+        volume_var = tk.IntVar(value=round(self.voice.volume * 100))
+
+        microphones = self.voice.microphones()
+        microphone_choices = ["Default microphone"] + [
+            f"{index}: {name}" for index, name in microphones
+        ]
+        selected_microphone = "Default microphone"
+        for choice, (index, _name) in zip(microphone_choices[1:], microphones):
+            if index == self.voice.microphone_index:
+                selected_microphone = choice
+                break
+        microphone_var = tk.StringVar(value=selected_microphone)
+
+        voices = self.voice.voices()
+        voice_choices = ["System default"] + [name for _voice_id, name in voices]
+        selected_voice = "System default"
+        for voice_id, name in voices:
+            if voice_id == self.voice.voice_id:
+                selected_voice = name
+                break
+        voice_var = tk.StringVar(value=selected_voice)
+
+        row = section("APPEARANCE", 0)
+        label("Theme", row)
+        ttk.Combobox(
+            content,
+            textvariable=theme_var,
+            values=("Dark", "Light"),
+            state="readonly",
+            width=24,
+        ).grid(row=row, column=1, sticky="ew", padx=(0, 22), pady=7)
+        row = section("VOICE", row + 1)
+        check("Read assistant responses aloud", responses_var, row)
+        row += 1
+        label("Microphone", row)
+        ttk.Combobox(
+            content,
+            textvariable=microphone_var,
+            values=microphone_choices,
+            state="readonly",
+        ).grid(row=row, column=1, sticky="ew", padx=(0, 22), pady=7)
+        row += 1
+        label("System voice", row)
+        ttk.Combobox(
+            content,
+            textvariable=voice_var,
+            values=voice_choices,
+            state="readonly",
+        ).grid(row=row, column=1, sticky="ew", padx=(0, 22), pady=7)
+        row += 1
+        label("Speaking rate", row)
+        tk.Scale(
+            content,
+            variable=rate_var,
+            from_=120,
+            to=240,
+            orient="horizontal",
+            showvalue=True,
+            bg=c["surface"],
+            fg=c["text"],
+            troughcolor=c["surface_2"],
+            highlightthickness=0,
+        ).grid(row=row, column=1, sticky="ew", padx=(0, 22), pady=3)
+        row += 1
+        label("Volume", row)
+        tk.Scale(
+            content,
+            variable=volume_var,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            showvalue=True,
+            bg=c["surface"],
+            fg=c["text"],
+            troughcolor=c["surface_2"],
+            highlightthickness=0,
+        ).grid(row=row, column=1, sticky="ew", padx=(0, 22), pady=3)
+        row = section("DESKTOP", row + 1)
+        check("Show reminder notifications", notifications_var, row)
+        row += 1
+        check("Keep ACCESS available in the system tray", tray_var, row)
+        row += 1
+        check("Enable Ctrl+Alt+Space global voice shortcut", hotkey_var, row)
+
+        footer = tk.Frame(dialog, bg=c["bg"])
+        footer.pack(fill="x", padx=30, pady=22)
+
+        def save() -> None:
+            microphone_index = None
+            if microphone_var.get() != "Default microphone":
+                microphone_index = int(microphone_var.get().split(":", 1)[0])
+            voice_id = None
+            if voice_var.get() != "System default":
+                voice_id = next(
+                    (item_id for item_id, name in voices if name == voice_var.get()),
+                    None,
+                )
+            new_theme = theme_var.get().casefold()
+            self.voice_responses = responses_var.get()
+            self.notifications_enabled = notifications_var.get()
+            self.minimize_to_tray = tray_var.get()
+            self.global_hotkey_enabled = hotkey_var.get()
+            self.voice.configure(
+                language="en-US",
+                rate=rate_var.get(),
+                volume=volume_var.get() / 100,
+                voice_id=voice_id,
+                microphone_index=microphone_index,
+            )
+            settings = self._read_settings()
+            settings.update(
+                {
+                    "theme": new_theme,
+                    "notifications_enabled": self.notifications_enabled,
+                    "minimize_to_tray": self.minimize_to_tray,
+                    "global_hotkey_enabled": self.global_hotkey_enabled,
+                    "voice": {
+                        "responses_enabled": self.voice_responses,
+                        "language": self.voice.language,
+                        "rate": self.voice.rate,
+                        "volume": self.voice.volume,
+                        "voice_id": self.voice.voice_id,
+                        "microphone_index": self.voice.microphone_index,
+                    },
+                }
+            )
+            settings.pop("voice_responses", None)
+            try:
+                self._write_settings(settings)
+            except OSError as error:
+                messagebox.showerror("Unable to save settings", str(error), parent=dialog)
+                return
+            self.desktop.configure_hotkey(self.global_hotkey_enabled)
+            self.desktop.configure_tray(self.minimize_to_tray)
+            dialog.destroy()
+            if new_theme != self.theme_name:
+                self.toggle_theme()
+            else:
+                self.voice_output_button.configure(
+                    text="🔊" if self.voice_responses else "🔇"
+                )
+
+        tk.Button(
+            footer,
+            text="Save settings",
+            command=save,
+            relief="flat",
+            bd=0,
+            padx=22,
+            pady=10,
+            bg=c["accent"],
+            activebackground=c["accent_hover"],
+            fg="#06110F",
+            font=("Segoe UI", 10, "bold"),
+            cursor="hand2",
+        ).pack(side="right")
+        self._small_button(footer, "Cancel", dialog.destroy, c["surface"]).pack(
+            side="right", padx=(0, 10)
+        )
 
     def _render_quick_actions(self) -> None:
         for child in self.quick_grid.winfo_children():
@@ -1092,6 +1799,38 @@ class AccessGUI:
             cursor="hand2",
         )
         self.send_button.pack(side="right", padx=18, pady=14)
+        self.voice_button = tk.Button(
+            composer,
+            text="🎤",
+            command=self.start_voice_input,
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=12,
+            bg=c["surface_2"],
+            activebackground=c["border"],
+            fg=c["accent"],
+            activeforeground=c["accent"],
+            font=("Segoe UI Emoji", 13),
+            cursor="hand2",
+        )
+        self.voice_button.pack(side="right", padx=(0, 4), pady=14)
+        self.voice_output_button = tk.Button(
+            composer,
+            text="🔊" if self.voice_responses else "🔇",
+            command=self.toggle_voice_responses,
+            relief="flat",
+            bd=0,
+            padx=10,
+            pady=12,
+            bg=c["input"],
+            activebackground=c["surface_2"],
+            fg=c["muted"],
+            activeforeground=c["text"],
+            font=("Segoe UI Emoji", 12),
+            cursor="hand2",
+        )
+        self.voice_output_button.pack(side="right", padx=(4, 6), pady=14)
 
     def _status_card(self, parent: tk.Widget, icon: str, label: str, value: str, color: str) -> None:
         c = self.colors
@@ -1131,9 +1870,12 @@ class AccessGUI:
         self.root.bind("<Control-k>", lambda _event: self.command_entry.focus_set())
         self.root.bind("<Control-n>", lambda _event: self.clear_conversation())
         self.root.bind("<F1>", lambda _event: self.show_help())
+        self.root.bind("<Control-Shift-v>", lambda _event: self.start_voice_input())
         self.root.bind("<Escape>", lambda _event: self.command_entry.focus_set())
 
     def submit_from_entry(self) -> None:
+        if self.listening:
+            return
         command = self.command_entry.get().strip()
         if command == "Type your message...":
             return
@@ -1146,6 +1888,16 @@ class AccessGUI:
             return
 
         command_lower = command.casefold()
+        try:
+            reminder_response = self.reminders.interpret(command)
+        except OSError as error:
+            reminder_response = f"I couldn't save that reminder: {error}"
+        if reminder_response is not None:
+            self._add_message(command, sender="user")
+            self._add_message(reminder_response, sender="assistant")
+            if self.voice_responses:
+                self.voice.speak(reminder_response)
+            return
         if command_lower in {"clear", "/clear", "clear chat", "new chat", "new conversation"}:
             self.clear_conversation()
             return
@@ -1155,12 +1907,27 @@ class AccessGUI:
         if command_lower in {"history", "/history", "show history"}:
             self.show_history()
             return
+        if command_lower in {"settings", "/settings", "open settings"}:
+            self.show_settings()
+            return
+        if command_lower in {
+            "dashboard",
+            "/dashboard",
+            "system dashboard",
+            "open dashboard",
+            "system health",
+        }:
+            self.show_system_dashboard()
+            return
         if command_lower == "status":
             self._add_message(command, sender="user")
-            self._add_message(
-                f"System online. Engine ready in offline-first mode on {platform.system() or os.name}.",
-                sender="assistant",
+            response = (
+                f"System online. Engine ready in offline-first mode on "
+                f"{platform.system() or os.name}."
             )
+            self._add_message(response, sender="assistant")
+            if self.voice_responses:
+                self.voice.speak(response)
             return
         if command_lower == "about":
             messagebox.showinfo(
@@ -1190,11 +1957,63 @@ class AccessGUI:
                 self._complete_command(response, context=command)
         except queue.Empty:
             pass
+        try:
+            while True:
+                succeeded, message = self._voice_results.get_nowait()
+                self._complete_voice_input(succeeded, message)
+        except queue.Empty:
+            pass
+        try:
+            while True:
+                self._handle_desktop_event(self._desktop_events.get_nowait())
+        except queue.Empty:
+            pass
+        try:
+            while True:
+                generation, result = self._dashboard_results.get_nowait()
+                self._complete_dashboard_refresh(generation, result)
+        except queue.Empty:
+            pass
         if self.root.winfo_exists():
             self.root.after(50, self._poll_results)
 
+    def _poll_reminders(self) -> None:
+        try:
+            due_reminders = self.reminders.due_reminders()
+        except OSError:
+            due_reminders = []
+        for reminder in due_reminders:
+            response = f"Reminder: {reminder.message}"
+            self._add_message(response, sender="assistant")
+            if self.notifications_enabled:
+                self.desktop.notify("ACCESS reminder", reminder.message)
+            if self.voice_responses:
+                self.voice.speak(response)
+        if self.root.winfo_exists():
+            self.root.after(1000, self._poll_reminders)
+
+    def _start_desktop_integrations(self) -> None:
+        self.desktop.start(self.global_hotkey_enabled, self.minimize_to_tray)
+
+    def _handle_desktop_event(self, event: str) -> None:
+        if event == "show":
+            self._show_window()
+        elif event == "voice":
+            self._show_window()
+            self.root.after(150, self.start_voice_input)
+        elif event == "quit":
+            self._shutdown()
+
+    def _show_window(self) -> None:
+        self.root.deiconify()
+        self.root.overrideredirect(True)
+        self.root.lift()
+        self.root.focus_force()
+
     def _complete_command(self, response: str, context: str = "") -> None:
         self._add_message(response, sender="assistant", context=context)
+        if self.voice_responses:
+            self.voice.speak(response)
         self._set_busy(False)
         if self.engine.pending_action:
             action = str(self.engine.pending_action).replace("_", " ").title()
@@ -1204,10 +2023,86 @@ class AccessGUI:
             self.root.after(700, self.close)
         self.command_entry.focus_set()
 
+    def start_voice_input(self) -> None:
+        """Listen for one spoken command without blocking tkinter."""
+
+        if self.busy or self.listening:
+            return
+        self.listening = True
+        self._start_listening_animation()
+        self.voice_button.configure(state="disabled")
+        self.send_button.configure(state="disabled")
+        self.command_entry.configure(state="disabled")
+        threading.Thread(target=self._listen_for_voice, daemon=True).start()
+
+    def _listen_for_voice(self) -> None:
+        try:
+            transcript = self.voice.listen()
+            self._voice_results.put((True, transcript))
+        except VoiceError as error:
+            self._voice_results.put((False, str(error)))
+        except Exception as error:
+            self._voice_results.put((False, f"Voice input failed: {error}"))
+
+    def _complete_voice_input(self, succeeded: bool, message: str) -> None:
+        self.listening = False
+        if self._listening_animation_job is not None:
+            self.root.after_cancel(self._listening_animation_job)
+            self._listening_animation_job = None
+        self.voice_button.configure(text="🎤", state="normal")
+        self.send_button.configure(state="normal")
+        self.command_entry.configure(state="normal")
+        self.activity_label.configure(text="Ready", fg=self.colors["muted"])
+        if succeeded:
+            self.command_entry.delete(0, "end")
+            self.command_entry.configure(fg=self.colors["text"])
+            self.command_entry.insert(0, message)
+            self.submit_from_entry()
+        else:
+            self._add_message(message, sender="assistant")
+            self.command_entry.focus_set()
+
+    def _start_listening_animation(self) -> None:
+        """Pulse the microphone and listening label until capture completes."""
+
+        frames = (("●", "Listening"), ("◉", "Listening."), ("◎", "Listening.."), ("◉", "Listening..."))
+
+        def animate() -> None:
+            if not self.listening or not self.root.winfo_exists():
+                self._listening_animation_job = None
+                return
+            symbol, label = frames[self._listening_animation_frame % len(frames)]
+            self._listening_animation_frame += 1
+            self.voice_button.configure(text=symbol, fg=self.colors["accent"])
+            self.activity_label.configure(text=label, fg=self.colors["accent"])
+            self._listening_animation_job = self.root.after(240, animate)
+
+        self._listening_animation_frame = 0
+        animate()
+
+    def toggle_voice_responses(self) -> None:
+        self.voice_responses = not self.voice_responses
+        if not self.voice_responses:
+            self.voice.stop()
+        self.voice_output_button.configure(
+            text="🔊" if self.voice_responses else "🔇"
+        )
+        settings = self._read_settings()
+        settings["voice_responses"] = self.voice_responses
+        try:
+            self._write_settings(settings)
+        except OSError as error:
+            messagebox.showerror(
+                "Unable to save voice setting",
+                f"ACCESS could not save the voice setting:\n{error}",
+                parent=self.root,
+            )
+
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
         self.activity_label.configure(text="ACCESS is thinking…" if busy else "Ready", fg=self.colors["accent"] if busy else self.colors["muted"])
         self.send_button.configure(state="disabled" if busy else "normal")
+        self.voice_button.configure(state="disabled" if busy else "normal")
         self.command_entry.configure(state="disabled" if busy else "normal")
 
     def _add_welcome_message(self) -> None:
@@ -1638,8 +2533,11 @@ class AccessGUI:
             "  create file notes.txt  •  read file notes.txt\n"
             "  search file report  •  copy file A to B\n"
             "  move file A to B  •  rename file A to B\n"
+            "  remind me in 10 minutes to stretch\n"
+            "  show reminders  •  system dashboard  •  open settings\n"
             "  shutdown  •  restart  •  sleep\n\n"
-            "Shortcuts: Enter to send, Ctrl+K to focus, Ctrl+N for a new conversation, F1 for help."
+            "Shortcuts: Enter to send, Ctrl+K to focus, Ctrl+Shift+V to listen, "
+            "Ctrl+Alt+Space for global voice, Ctrl+N for a new conversation, F1 for help."
         )
         messagebox.showinfo("ACCESS commands", commands, parent=self.root)
 
@@ -1653,7 +2551,15 @@ class AccessGUI:
         self.command_entry.focus_set()
 
     def toggle_theme(self) -> None:
+        if self._dashboard_window and self._dashboard_window.winfo_exists():
+            self._close_system_dashboard()
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
+        settings = self._read_settings()
+        settings["theme"] = self.theme_name
+        try:
+            self._write_settings(settings)
+        except OSError:
+            pass
         # Rebuilding is safer than recursively recoloring widgets with mixed roles.
         self.app_container.destroy()
         self.colors = THEMES[self.theme_name]
@@ -1724,13 +2630,31 @@ class AccessGUI:
         self.chat_canvas.update_idletasks()
         self.chat_canvas.yview_moveto(1.0)
 
-    def close(self) -> None:
+    def _request_close(self) -> None:
+        if self.minimize_to_tray and self.desktop.tray_available:
+            self.root.withdraw()
+            if self.notifications_enabled:
+                self.desktop.notify(
+                    "ACCESS is still running",
+                    "Use the tray icon or Ctrl+Alt+Space to return.",
+                )
+            return
+        self._shutdown()
+
+    def _shutdown(self) -> None:
         self.engine.running = False
+        self.voice.stop()
+        self.desktop.stop()
         try:
             self.engine.memory.close()
         except Exception:
             pass
         self.root.destroy()
+
+    def close(self) -> None:
+        """Fully exit ACCESS (used by commands and the tray Quit action)."""
+
+        self._shutdown()
 
     def run(self) -> None:
         self.root.mainloop()
