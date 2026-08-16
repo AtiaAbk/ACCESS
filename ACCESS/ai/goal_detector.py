@@ -3,84 +3,91 @@ import re
 
 class GoalDetector:
     """
-    Detect intent and target from natural-language commands.
-
-    This layer does NOT execute anything.
-    It only converts language into structured intent.
+    Detects intent + target from natural language
+    with a confidence score.
     """
 
     PATTERNS = [
-        # Applications
+        # -------------------------------------------------
+        # APPLICATION CONTROL
+        # -------------------------------------------------
+
         (
             "open_application",
-            r"\b(?:open|launch|start)\s+(.+)",
+            r"\bopen\s+(.+)",
             0.90,
         ),
         (
             "close_application",
-            r"\b(?:close|quit|stop)\s+(.+)",
+            r"\bclose\s+(.+)",
             0.90,
         ),
 
-        # System
+        # -------------------------------------------------
+        # SYSTEM CONTROL
+        # -------------------------------------------------
+
         (
             "shutdown",
-            r"\b(?:shut\s*down|power\s*off)\b",
+            r"\bshut\s*down\b",
             0.95,
         ),
         (
             "restart",
-            r"\b(?:restart|reboot)\b",
+            r"\brestart\b",
             0.95,
         ),
         (
             "sleep",
-            r"\b(?:put\s+(?:the\s+)?computer\s+to\s+sleep|sleep)\b",
+            r"\bsleep\b",
             0.90,
         ),
         (
             "lock_screen",
-            r"\b(?:lock\s+(?:the\s+)?screen|lock\s+(?:the\s+)?computer)\b",
+            r"\block\s+(?:the\s+)?screen\b|\block\s+computer\b|\block\s+pc\b",
             0.90,
         ),
 
-        # Screenshot
+        # -------------------------------------------------
+        # TIME / DATE
+        # -------------------------------------------------
+
+        (
+            "get_time",
+            r"\b(?:what(?:'s| is)?\s+)?(?:the\s+)?(?:current\s+)?time(?:\s+is\s+it)?\b"
+            r"|\btime\s+(?:is\s+it|now)\b"
+            r"|\bcurrent\s+time\b"
+            r"|\bwhat\s+time\s+is\s+it\b",
+            0.95,
+        ),
+
+        (
+            "get_date",
+            r"\b(?:what(?:'s| is)?\s+)?(?:today'?s?\s+)?date(?:\s+is\s+it)?\b"
+            r"|\bcurrent\s+date\b"
+            r"|\bwhat\s+date\s+is\s+it\b"
+            r"|\bwhat\s+day\s+is\s+(?:it|today)\b"
+            r"|\bwhat\s+day\s+today\b",
+            0.95,
+        ),
+
+        # -------------------------------------------------
+        # SCREENSHOT
+        # -------------------------------------------------
+
         (
             "screenshot",
-            r"\b(?:take\s+(?:a\s+)?screenshot|capture\s+(?:the\s+)?screen|screenshot)\b",
-            0.95,
-        ),
-
-        # Audio
-        (
-            "volume_up",
-            r"\b(?:volume\s+up|increase\s+volume|turn\s+volume\s+up|louder)\b",
-            0.90,
-        ),
-        (
-            "volume_down",
-            r"\b(?:volume\s+down|decrease\s+volume|turn\s+volume\s+down|quieter)\b",
-            0.90,
-        ),
-        (
-            "mute",
-            r"\b(?:mute|mute\s+volume|mute\s+sound)\b",
-            0.95,
-        ),
-
-        # Brightness
-        (
-            "brightness_up",
-            r"\b(?:brightness\s+up|increase\s+brightness|turn\s+brightness\s+up|brighter)\b",
-            0.90,
-        ),
-        (
-            "brightness_down",
-            r"\b(?:brightness\s+down|decrease\s+brightness|turn\s+brightness\s+down|darker)\b",
+            r"\btake\s+(?:a\s+)?screenshot\b"
+            r"|\bscreenshot\b"
+            r"|\bcapture\s+(?:the\s+)?screen\b"
+            r"|\bcapture\s+screen\b",
             0.90,
         ),
 
-        # Files
+        # -------------------------------------------------
+        # FILE OPERATIONS
+        # -------------------------------------------------
+
         (
             "create_file",
             r"\bcreate\s+(?:a\s+)?file\s+(.+)",
@@ -98,119 +105,114 @@ class GoalDetector:
         ),
         (
             "search_file",
-            r"\b(?:find|search)\s+(?:for\s+)?(?:the\s+)?file\s+(.+)",
-            0.85,
+            r"\bfind\s+(?:the\s+)?file\s+(.+)"
+            r"|\bsearch\s+(?:for\s+)?(.+)",
+            0.80,
         ),
         (
             "copy_file",
-            r"\bcopy\s+file\s+(.+?)\s+to\s+(.+)",
+            r"\bcopy\s+(?:the\s+)?file\s+(.+)",
             0.85,
         ),
         (
             "move_file",
-            r"\bmove\s+file\s+(.+?)\s+to\s+(.+)",
+            r"\bmove\s+(?:the\s+)?file\s+(.+)",
             0.85,
         ),
         (
             "rename_file",
-            r"\brename\s+file\s+(.+?)\s+to\s+(.+)",
+            r"\brename\s+(?:the\s+)?file\s+(.+)",
             0.85,
-        ),
-
-        # Dark/light mode
-        (
-            "dark_mode",
-            r"\b(?:turn\s+on|enable|switch\s+to)\s+(?:dark\s+mode|dark\s+theme)\b",
-            0.90,
-        ),
-        (
-            "light_mode",
-            r"\b(?:turn\s+on|enable|switch\s+to)\s+(?:light\s+mode|white\s+mode|light\s+theme)\b",
-            0.90,
-        ),
-
-        # Time/date
-        (
-            "current_time",
-            r"\b(?:what\s+(?:is|s)\s+the\s+time|what\s+time\s+is\s+it|current\s+time|time\s+now)\b",
-            0.98,
-        ),
-        (
-            "current_date",
-            r"\b(?:what\s+(?:is|s)\s+(?:the\s+)?date|today'?s\s+date|what\s+day\s+is\s+today)\b",
-            0.98,
-        ),
-
-        # Reminder / alarm
-        (
-            "set_reminder",
-            r"\b(?:set|create|make)\s+(?:a\s+)?reminder\b(.+)?",
-            0.90,
-        ),
-        (
-            "set_alarm",
-            r"\b(?:set|create)\s+(?:an\s+)?alarm\b(.+)?",
-            0.90,
         ),
     ]
 
-    LEADING_FILLER = re.compile(
-        r"^(?:could you|can you|would you|will you|"
-        r"please|i want to|i need to|i'd like to|"
-        r"hey|kindly|jarvis|access)\s+",
-        re.IGNORECASE,
+    # -----------------------------------------------------
+    # LEADING FILLER
+    # -----------------------------------------------------
+
+    LEADING_FILLER = (
+        r"^(?:"
+        r"could you|"
+        r"can you|"
+        r"would you|"
+        r"will you|"
+        r"please|"
+        r"i want to|"
+        r"i need to|"
+        r"i'd like to|"
+        r"hey|"
+        r"kindly"
+        r")\s+"
     )
 
-    TRAILING_FILLER = re.compile(
-        r"\s*(?:for me|please|now|thanks|thank you)"
-        r"\s*[?!.]*\s*$",
-        re.IGNORECASE,
+    # -----------------------------------------------------
+    # TRAILING FILLER
+    # -----------------------------------------------------
+
+    TRAILING_FILLER = (
+        r"\s*"
+        r"(?:for me|please|now|thanks|thank you)?"
+        r"\s*[?!.]*\s*$"
     )
+
+    # -----------------------------------------------------
+    # TITLE CASE TARGETS
+    # -----------------------------------------------------
 
     TITLE_CASE_INTENTS = {
         "open_application",
         "close_application",
     }
 
-    APPLICATION_ALIASES = {
-        "chrome": "Google Chrome",
-        "google chrome": "Google Chrome",
-        "calculator": "Calculator",
-        "calc": "Calculator",
-        "vscode": "Visual Studio Code",
-        "vs code": "Visual Studio Code",
-        "visual studio code": "Visual Studio Code",
-        "code": "Visual Studio Code",
-        "terminal": "Terminal",
-        "safari": "Safari",
-        "finder": "Finder",
-        "notes": "Notes",
-    }
+    # -----------------------------------------------------
+    # DETECTION
+    # -----------------------------------------------------
 
     def detect(self, text: str):
         """
         Return:
 
             (intent, target, confidence)
+
+        Unknown commands return:
+
+            ("unknown", None, 0.0)
         """
 
-        original = (text or "").strip()
+        original_cleaned = (
+            (text or "")
+            .strip()
+            .lower()
+        )
 
-        if not original:
+        if not original_cleaned:
             return "unknown", None, 0.0
 
-        stripped = self.LEADING_FILLER.sub(
+        # ---------------------------------------------
+        # Remove leading conversational filler
+        # ---------------------------------------------
+
+        stripped = re.sub(
+            self.LEADING_FILLER,
             "",
-            original,
+            original_cleaned,
             count=1,
         ).strip()
 
-        for intent, pattern, confidence in self.PATTERNS:
+        # ---------------------------------------------
+        # Check patterns
+        # ---------------------------------------------
+
+        for (
+            intent,
+            pattern,
+            base_confidence,
+        ) in self.PATTERNS:
 
             match = re.search(
                 pattern,
                 stripped,
-                re.IGNORECASE,
+                flags=re.IGNORECASE,
             )
 
             if not match:
@@ -218,13 +220,26 @@ class GoalDetector:
 
             target = None
 
+            # -----------------------------------------
+            # Extract first non-empty capture group
+            # -----------------------------------------
+
             for group in match.groups():
+
                 if group:
+
                     target = group.strip()
+
                     break
 
+            # -----------------------------------------
+            # Clean target
+            # -----------------------------------------
+
             if target:
-                target = self.TRAILING_FILLER.sub(
+
+                target = re.sub(
+                    self.TRAILING_FILLER,
                     "",
                     target,
                 ).strip()
@@ -233,21 +248,46 @@ class GoalDetector:
                     r"^(?:the|a|an)\s+",
                     "",
                     target,
-                    flags=re.IGNORECASE,
                 ).strip()
 
-            if intent in self.TITLE_CASE_INTENTS and target:
+                if (
+                    intent
+                    in self.TITLE_CASE_INTENTS
+                    and target
+                ):
 
-                target_lower = target.lower()
-
-                target = self.APPLICATION_ALIASES.get(
-                    target_lower,
-                    " ".join(
+                    target = " ".join(
                         word.capitalize()
                         for word in target.split()
-                    ),
+                    )
+
+            # -----------------------------------------
+            # Confidence
+            # -----------------------------------------
+
+            confidence = base_confidence
+
+            command_verb = intent.split("_")[0]
+
+            if stripped.startswith(command_verb):
+
+                confidence = min(
+                    confidence + 0.05,
+                    1.0,
                 )
 
-            return intent, target, confidence
+            return (
+                intent,
+                target,
+                confidence,
+            )
 
-        return "unknown", None, 0.0
+        # ---------------------------------------------
+        # Unknown
+        # ---------------------------------------------
+
+        return (
+            "unknown",
+            None,
+            0.0,
+        )

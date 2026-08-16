@@ -151,6 +151,21 @@ class AccessEngine:
             return "Please enter a command."
 
         # ----------------------------------------------------
+        # DATE / TIME / DAY
+        # ----------------------------------------------------
+
+        datetime_response = self._handle_datetime_query(command)
+
+        if datetime_response is not None:
+
+            self._save_memory(
+                command,
+                datetime_response,
+            )
+
+            return datetime_response
+
+        # ----------------------------------------------------
         # PENDING CONFIRMATION
         # ----------------------------------------------------
 
@@ -632,6 +647,93 @@ class AccessEngine:
         )
 
     # ========================================================
+    # DATE / TIME / DAY
+    # ========================================================
+
+    def _handle_datetime_query(self, command: str):
+        """
+        Handle basic date, time and day questions locally.
+        This does not depend on the LLM, so ACCESS can answer
+        time/date questions even when Ollama is unavailable.
+        """
+
+        text = command.strip().lower()
+
+        # Normalize common variations
+        normalized = (
+            text
+            .replace("today's", "todays")
+            .replace("what's", "what is")
+            .replace("whats", "what is")
+            .replace("current", "current")
+        )
+
+        time_phrases = (
+            "what time is it",
+            "what is the time",
+            "what is current time",
+            "what is the current time",
+            "tell me the time",
+            "tell me current time",
+            "tell me the current time",
+            "current time",
+            "time now",
+            "what time",
+        )
+
+        date_phrases = (
+            "what is today's date",
+            "what is todays date",
+            "what is the date",
+            "what is today's date today",
+            "tell me today's date",
+            "tell me todays date",
+            "tell me the date",
+            "current date",
+            "today's date",
+            "todays date",
+        )
+
+        day_phrases = (
+            "what day is today",
+            "what day is it",
+            "what day is today",
+            "tell me what day it is",
+            "tell me the day",
+            "which day is today",
+            "what is the day today",
+        )
+
+        # TIME
+        if any(phrase in normalized for phrase in time_phrases):
+
+            now = datetime.now()
+
+            return (
+                f"It's {now.strftime('%I:%M:%S %p')}."
+            )
+
+        # DATE
+        if any(phrase in normalized for phrase in date_phrases):
+
+            now = datetime.now()
+
+            return (
+                f"Today is {now.strftime('%B %d, %Y')}."
+            )
+
+        # DAY
+        if any(phrase in normalized for phrase in day_phrases):
+
+            now = datetime.now()
+
+            return (
+                f"Today is {now.strftime('%A')}."
+            )
+
+        return None
+
+    # ========================================================
     # INTENT EXECUTION
     # ========================================================
 
@@ -746,6 +848,18 @@ class AccessEngine:
             return self.system.light_mode()
 
         # ====================================================
+        # TIME / DATE
+        # ====================================================
+
+        if intent_name == "get_time":
+
+            return self._get_current_time()
+
+        if intent_name == "get_date":
+
+            return self._get_current_date()
+
+        # ====================================================
         # APPLICATION CONTROL
         # ====================================================
 
@@ -854,6 +968,30 @@ class AccessEngine:
         return (
             "Sorry, I don't have permission "
             "to access or perform that task."
+        )
+
+    # ========================================================
+    # TIME / DATE HELPERS
+    # ========================================================
+
+    @staticmethod
+    def _get_current_time() -> str:
+        """Return the current local system time."""
+
+        now = datetime.now()
+
+        return (
+            f"It's {now.strftime('%I:%M %p').lstrip('0')}."
+        )
+
+    @staticmethod
+    def _get_current_date() -> str:
+        """Return the current local system date."""
+
+        now = datetime.now()
+
+        return (
+            f"Today is {now.strftime('%A, %B %d, %Y')}."
         )
 
     # ========================================================
