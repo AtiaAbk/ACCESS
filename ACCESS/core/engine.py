@@ -22,16 +22,18 @@ class AccessEngine:
     Central execution engine for ACCESS.
 
     Responsibilities:
-    - Receive user commands
     - Deterministic command routing
-    - AI interpretation for unknown commands
+    - AI decision layer
     - Local LLM fallback
-    - Execute single-step tasks
-    - Execute multi-step tasks
-    - Handle confirmation
-    - Handle screenshots
-    - Handle file operations
-    - Store interactions in local memory
+    - Natural conversation
+    - General question answering
+    - System control
+    - Application control
+    - File operations
+    - Screenshot capture
+    - Multi-step execution
+    - Confirmation handling
+    - Local memory
     """
 
     # ========================================================
@@ -75,15 +77,54 @@ class AccessEngine:
             "sleep",
         }
 
+        # ----------------------------------------------------
+        # CONVERSATIONAL INTENTS
+        # ----------------------------------------------------
+
+        self.conversational_intents = {
+            "conversation",
+            "chat",
+            "question",
+        }
+
+        # ----------------------------------------------------
+        # NON-DESTRUCTIVE QUESTION PREFIXES
+        #
+        # These are used only as a lightweight fallback when
+        # the deterministic router and AI decision layer do
+        # not identify an executable system task.
+        # ----------------------------------------------------
+
+        self.question_prefixes = (
+            "what ",
+            "what's ",
+            "whats ",
+            "who ",
+            "why ",
+            "how ",
+            "when ",
+            "where ",
+            "which ",
+            "can you ",
+            "could you ",
+            "do you ",
+            "is ",
+            "are ",
+            "tell me ",
+            "explain ",
+            "calculate ",
+            "solve ",
+        )
+
     # ========================================================
     # MAIN PROCESSOR
     # ========================================================
 
     def process(self, user_input: str) -> str:
         """
-        Process a user command.
+        Process one user command.
 
-        Priority:
+        Processing priority:
 
             User Input
                  ↓
@@ -95,7 +136,9 @@ class AccessEngine:
                  ↓
             Local LLM
                  ↓
-            Permission / Unknown
+            Natural conversation / question
+                 ↓
+            Permission-aware fallback
         """
 
         command = (user_input or "").strip()
@@ -113,9 +156,7 @@ class AccessEngine:
 
         if self.pending_action is not None:
 
-            response = self._handle_confirmation(
-                command
-            )
+            response = self._handle_confirmation(command)
 
             self._save_memory(
                 command,
@@ -127,14 +168,6 @@ class AccessEngine:
         # ====================================================
         # DETERMINISTIC ROUTER FIRST
         # ====================================================
-
-        # Known commands MUST be handled here before AI.
-        #
-        # This prevents the AI from incorrectly interpreting:
-        #
-        # "turn on darkmode"
-        #
-        # as another command such as lock_screen.
 
         intent = self.router.route(command)
 
@@ -153,10 +186,10 @@ class AccessEngine:
             return response
 
         # ====================================================
-        # AI INTERPRETATION
+        # AI DECISION ENGINE
         # ====================================================
 
-        recent_memory = self.get_recent_memory(5)
+        recent_memory = self.get_recent_memory(8)
 
         try:
 
@@ -166,9 +199,6 @@ class AccessEngine:
             )
 
         except Exception:
-
-            # AI failure must never destroy
-            # deterministic functionality.
 
             ai_result = None
 
@@ -201,6 +231,28 @@ class AccessEngine:
                 return response
 
             # ------------------------------------------------
+            # CONVERSATIONAL AI RESULT
+            # ------------------------------------------------
+
+            if (
+                ai_result.intent
+                in self.conversational_intents
+            ):
+
+                response = self._ask_local_llm(
+                    command
+                )
+
+                if response:
+
+                    self._save_memory(
+                        command,
+                        response,
+                    )
+
+                    return response
+
+            # ------------------------------------------------
             # SINGLE AI INTENT
             # ------------------------------------------------
 
@@ -224,42 +276,56 @@ class AccessEngine:
                 return response
 
         # ====================================================
-        # LOCAL LLM FALLBACK
+        # LOCAL LLM
         # ====================================================
 
-        try:
+        local_result = self._local_llm_interpret(
+            command
+        )
 
-            if self.local_llm.is_available():
+        if local_result is not None:
 
-                local_result = (
-                    self.local_llm.interpret(command)
-                )
-
-                local_intent = local_result.get(
+            local_intent = (
+                local_result.get(
                     "intent",
                     "unknown",
                 )
+                or "unknown"
+            ).strip().lower()
 
-                local_target = local_result.get(
+            local_target = (
+                local_result.get(
                     "target",
                     "",
                 )
+                or ""
+            ).strip()
 
-                local_response = local_result.get(
+            local_response = (
+                local_result.get(
                     "response",
                     "",
                 )
+                or ""
+            ).strip()
 
-                # --------------------------------------------
-                # NORMAL CONVERSATION
-                # --------------------------------------------
+            # ------------------------------------------------
+            # CONVERSATION
+            # ------------------------------------------------
 
-                if local_intent == "conversation":
+            if local_intent in self.conversational_intents:
 
-                    response = (
-                        local_response
-                        or "I'm here to help."
+                if local_response:
+
+                    response = local_response
+
+                else:
+
+                    response = self._ask_local_llm(
+                        command
                     )
+
+                if response:
 
                     self._save_memory(
                         command,
@@ -268,33 +334,60 @@ class AccessEngine:
 
                     return response
 
-                # --------------------------------------------
-                # LOCAL LLM SYSTEM INTENT
-                # --------------------------------------------
+            # ------------------------------------------------
+            # SYSTEM / APPLICATION / FILE INTENT
+            # ------------------------------------------------
 
-                if local_intent != "unknown":
+            if local_intent != "unknown":
 
-                    response = self._execute_intent(
-                        local_intent,
-                        local_target,
-                    )
+                response = self._execute_intent(
+                    local_intent,
+                    local_target,
+                )
 
-                    self._save_memory(
-                        command,
-                        response,
-                    )
+                self._save_memory(
+                    command,
+                    response,
+                )
 
-                    return response
-
-        except Exception:
-            pass
+                return response
 
         # ====================================================
-        # FINAL PERMISSION RESPONSE
+        # DIRECT LOCAL LLM CHAT FALLBACK
+        #
+        # This is important for:
+        #
+        # "What is recursion?"
+        # "2 + 2"
+        # "Explain TCP"
+        # "Who are you?"
+        #
+        # We don't classify these as system commands.
+        # The local model answers naturally.
+        # ====================================================
+
+        if self._looks_like_question(command):
+
+            response = self._ask_local_llm(
+                command
+            )
+
+            if response:
+
+                self._save_memory(
+                    command,
+                    response,
+                )
+
+                return response
+
+        # ====================================================
+        # FINAL FAILURE
         # ====================================================
 
         response = (
-            "I don't have permission to do this."
+            "Sorry, I don't have permission "
+            "to access or perform that task."
         )
 
         self._save_memory(
@@ -303,6 +396,240 @@ class AccessEngine:
         )
 
         return response
+
+    # ========================================================
+    # LOCAL LLM INTERPRETATION
+    # ========================================================
+
+    def _local_llm_interpret(
+        self,
+        command: str,
+    ):
+        """
+        Safely ask the local LLM to classify a command.
+
+        Returns:
+            dict | None
+        """
+
+        try:
+
+            if not self.local_llm.is_available():
+                return None
+
+            result = self.local_llm.interpret(
+                command
+            )
+
+            if not isinstance(result, dict):
+                return None
+
+            return result
+
+        except Exception:
+
+            return None
+
+    # ========================================================
+    # LOCAL LLM CHAT
+    # ========================================================
+
+    def _ask_local_llm(
+        self,
+        command: str,
+    ) -> str:
+        """
+        Ask the local model for a natural conversational
+        answer.
+
+        This method intentionally keeps system execution
+        separate from general conversation.
+        """
+
+        try:
+
+            if not self.local_llm.is_available():
+                return ""
+
+            # ------------------------------------------------
+            # Use a dedicated chat method if the LocalLLM
+            # implementation provides one.
+            # ------------------------------------------------
+
+            chat_method = getattr(
+                self.local_llm,
+                "chat",
+                None,
+            )
+
+            if callable(chat_method):
+
+                result = chat_method(
+                    command,
+                    recent_memory=self.get_recent_memory(8),
+                )
+
+                if isinstance(result, dict):
+
+                    response = (
+                        result.get("response")
+                        or result.get("text")
+                        or ""
+                    )
+
+                    return str(
+                        response
+                    ).strip()
+
+                if result:
+
+                    return str(
+                        result
+                    ).strip()
+
+            # ------------------------------------------------
+            # Current LocalLLM only exposes interpret().
+            #
+            # Its "conversation" response can still be used
+            # as a compatibility fallback.
+            # ------------------------------------------------
+
+            result = self.local_llm.interpret(
+                command
+            )
+
+            if not isinstance(result, dict):
+                return ""
+
+            response = (
+                result.get("response")
+                or ""
+            )
+
+            return str(
+                response
+            ).strip()
+
+        except Exception:
+
+            return ""
+
+    # ========================================================
+    # QUESTION DETECTION
+    # ========================================================
+
+    def _looks_like_question(
+        self,
+        command: str,
+    ) -> bool:
+        """
+        Lightweight check for normal questions/chat.
+
+        This is NOT an AI classifier. It simply prevents
+        obviously conversational requests from immediately
+        receiving a permission error.
+        """
+
+        text = command.strip().lower()
+
+        if not text:
+            return False
+
+        # Mathematical expressions
+        if self._looks_like_math(text):
+            return True
+
+        # Explicit question mark
+        if "?" in text:
+            return True
+
+        # Common natural-language question starts
+        for prefix in self.question_prefixes:
+
+            if text.startswith(prefix):
+                return True
+
+        # Common conversational expressions
+        conversation_phrases = {
+            "hello",
+            "hi",
+            "hey",
+            "hello access",
+            "hi access",
+            "hey access",
+            "good morning",
+            "good afternoon",
+            "good evening",
+            "good night",
+            "thanks",
+            "thank you",
+            "who are you",
+            "what can you do",
+            "how are you",
+            "tell me a joke",
+            "make me laugh",
+        }
+
+        return text in conversation_phrases
+
+    # ========================================================
+    # BASIC MATH DETECTION
+    # ========================================================
+
+    @staticmethod
+    def _looks_like_math(
+        text: str,
+    ) -> bool:
+        """
+        Detect simple mathematical input.
+
+        Actual mathematical reasoning is delegated to the
+        local LLM rather than using unsafe eval().
+        """
+
+        if not text:
+            return False
+
+        allowed = set(
+            "0123456789"
+            "+-*/().%^ "
+        )
+
+        # Pure arithmetic expression
+        if all(
+            character in allowed
+            for character in text
+        ):
+
+            return any(
+                operator in text
+                for operator in (
+                    "+",
+                    "-",
+                    "*",
+                    "/",
+                    "%",
+                    "^",
+                )
+            )
+
+        math_words = (
+            "calculate",
+            "solve",
+            "equation",
+            "plus",
+            "minus",
+            "times",
+            "divided",
+            "square root",
+            "percentage",
+            "percent",
+        )
+
+        return any(
+            word in text.lower()
+            for word in math_words
+        )
 
     # ========================================================
     # INTENT EXECUTION
@@ -326,6 +653,7 @@ class AccessEngine:
         # ----------------------------------------------------
 
         if intent_name == "empty":
+
             return "Please enter a command."
 
         # ----------------------------------------------------
@@ -333,9 +661,10 @@ class AccessEngine:
         # ----------------------------------------------------
 
         if intent_name == "unknown":
+
             return (
-                "I don't have permission "
-                "to do this."
+                "Sorry, I don't have permission "
+                "to access or perform that task."
             )
 
         # ----------------------------------------------------
@@ -343,11 +672,13 @@ class AccessEngine:
         # ----------------------------------------------------
 
         if intent_name == "about":
+
             return (
-                "I am ACCESS.\n"
-                "Adaptive Cognitive Companion "
-                "for Efficient System Services.\n"
-                "An Intelligent Desktop Assistant."
+                "I'm ACCESS — your Adaptive Cognitive "
+                "Companion for Efficient System Services.\n"
+                "Think of me as your local-first desktop "
+                "assistant: I can chat, understand commands, "
+                "and help automate your system."
             )
 
         # ----------------------------------------------------
@@ -375,21 +706,27 @@ class AccessEngine:
         # ====================================================
 
         if intent_name == "lock_screen":
+
             return self.system.lock_screen()
 
         if intent_name == "volume_up":
+
             return self.system.volume_up()
 
         if intent_name == "volume_down":
+
             return self.system.volume_down()
 
         if intent_name == "mute":
+
             return self.system.mute()
 
         if intent_name == "brightness_up":
+
             return self.system.brightness_up()
 
         if intent_name == "brightness_down":
+
             return self.system.brightness_down()
 
         # ----------------------------------------------------
@@ -397,6 +734,7 @@ class AccessEngine:
         # ----------------------------------------------------
 
         if intent_name == "dark_mode":
+
             return self.system.dark_mode()
 
         # ----------------------------------------------------
@@ -404,6 +742,7 @@ class AccessEngine:
         # ----------------------------------------------------
 
         if intent_name == "light_mode":
+
             return self.system.light_mode()
 
         # ====================================================
@@ -431,6 +770,7 @@ class AccessEngine:
         # ====================================================
 
         if intent_name == "screenshot":
+
             return self._handle_screenshot()
 
         # ====================================================
@@ -486,13 +826,34 @@ class AccessEngine:
                 target,
             )
 
+        # ====================================================
+        # REMINDER / ALARM / TIMER
+        #
+        # These are routed explicitly so the engine does not
+        # falsely report success when a scheduler tool is not
+        # installed yet.
+        # ====================================================
+
+        if intent_name in {
+            "reminder",
+            "alarm",
+            "timer",
+            "schedule_task",
+        }:
+
+            return (
+                f"I understood that you want to set a "
+                f"{intent_name.replace('_', ' ')}, but the "
+                "scheduler service is not available yet."
+            )
+
         # ----------------------------------------------------
         # UNKNOWN INTENT
         # ----------------------------------------------------
 
         return (
-            "I don't have permission "
-            "to do this."
+            "Sorry, I don't have permission "
+            "to access or perform that task."
         )
 
     # ========================================================
@@ -530,6 +891,7 @@ class AccessEngine:
         """Execute task steps in order."""
 
         if not steps:
+
             return (
                 "No execution steps were generated."
             )
@@ -553,20 +915,35 @@ class AccessEngine:
                 f"Step {index}: {result}"
             )
 
+            # ------------------------------------------------
             # Stop if confirmation is required.
+            # ------------------------------------------------
 
             if self.pending_action is not None:
                 break
 
+            # ------------------------------------------------
             # Stop if ACCESS exits.
+            # ------------------------------------------------
 
             if not self.running:
                 break
 
         if not results:
+
             return (
                 "The task plan contained "
                 "no executable steps."
+            )
+
+        if (
+            self.pending_action is not None
+        ):
+
+            return (
+                "Multi-step task paused:\n"
+                + "\n".join(results)
+                + "\n\nWaiting for confirmation."
             )
 
         return (
@@ -705,12 +1082,15 @@ class AccessEngine:
         """Execute confirmed system actions."""
 
         if action == "shutdown":
+
             return self.system.execute_shutdown()
 
         if action == "restart":
+
             return self.system.execute_restart()
 
         if action == "sleep":
+
             return self.system.execute_sleep()
 
         return (
@@ -722,7 +1102,21 @@ class AccessEngine:
     # ========================================================
 
     def _handle_screenshot(self) -> str:
-        """Capture a screenshot using platform tools."""
+        """
+        Capture screenshot and open its containing folder.
+
+        macOS:
+            ~/Pictures/ACCESS
+            Finder opens automatically.
+
+        Windows:
+            ~/Pictures/ACCESS
+            Explorer opens automatically.
+
+        Linux:
+            ~/Pictures/ACCESS
+            File manager is opened when possible.
+        """
 
         try:
 
@@ -765,11 +1159,9 @@ class AccessEngine:
 
             elif system_name == "Windows":
 
-                escaped_path = str(
-                    filename
-                ).replace(
-                    "'",
-                    "''",
+                escaped_path = (
+                    str(filename)
+                    .replace("'", "''")
                 )
 
                 powershell_script = (
@@ -864,8 +1256,29 @@ class AccessEngine:
                     f"on {system_name}."
                 )
 
+            # ------------------------------------------------
+            # Verify screenshot exists.
+            # ------------------------------------------------
+
+            if not filename.exists():
+
+                return (
+                    "Screenshot command completed, "
+                    "but the screenshot file could "
+                    "not be found."
+                )
+
+            # ------------------------------------------------
+            # Open containing folder.
+            # ------------------------------------------------
+
+            self._open_folder(
+                screenshot_dir
+            )
+
             return (
-                f"Screenshot saved to: {filename}"
+                f"Screenshot saved to: {filename}\n"
+                f"Opened folder: {screenshot_dir}"
             )
 
         except Exception as error:
@@ -874,6 +1287,67 @@ class AccessEngine:
                 f"Screenshot tool unavailable: "
                 f"{error}"
             )
+
+    # ========================================================
+    # OPEN FOLDER
+    # ========================================================
+
+    @staticmethod
+    def _open_folder(
+        folder: Path,
+    ) -> bool:
+        """
+        Open a folder in the native file manager.
+
+        Returns True when an open command was launched.
+        """
+
+        try:
+
+            system_name = platform.system()
+
+            if system_name == "Darwin":
+
+                subprocess.Popen(
+                    [
+                        "open",
+                        str(folder),
+                    ]
+                )
+
+                return True
+
+            if system_name == "Windows":
+
+                os.startfile(
+                    str(folder)
+                )
+
+                return True
+
+            if system_name == "Linux":
+
+                opener = (
+                    shutil.which("xdg-open")
+                    or shutil.which("gio")
+                )
+
+                if opener:
+
+                    subprocess.Popen(
+                        [
+                            opener,
+                            str(folder),
+                        ]
+                    )
+
+                    return True
+
+        except Exception:
+
+            pass
+
+        return False
 
     # ========================================================
     # FILE OPERATIONS
@@ -1195,7 +1669,9 @@ class AccessEngine:
         )
 
     @staticmethod
-    def _search_file(target: str) -> str:
+    def _search_file(
+        target: str,
+    ) -> str:
         """Search current directory recursively."""
 
         query = target.strip()
