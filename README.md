@@ -75,6 +75,7 @@ ACCESS: Opening Calculator.
 ```
 <div align="center">
 <img src="Screenshot 2026-08-12 at 01.44.06.png" alt="ACCESS Banner" width="700"/>
+</div>
 
 ## 🗺️ Roadmap
 
@@ -83,7 +84,6 @@ ACCESS: Opening Calculator.
 - [ ] Persistent memory system
 - [ ] Multi-step task planning
 - [ ] Voice interface
-</div>
 
 ## 👥 Contributors
 
