@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.png" alt="ACCESS Banner" width="700"/>
+<img src="banner.png" alt="ACCESS Banner" width="700"/>
 
 # ACCESS
 
