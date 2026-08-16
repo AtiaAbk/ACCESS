@@ -73,6 +73,7 @@ python main.py
 ACCESS > open calculator
 ACCESS: Opening Calculator.
 ```
+<img src="Screenshot 2026-08-12 at 01.44.06.png" alt="ACCESS Banner" width="700"/>
 
 ## 🗺️ Roadmap
 
@@ -81,6 +82,7 @@ ACCESS: Opening Calculator.
 - [ ] Persistent memory system
 - [ ] Multi-step task planning
 - [ ] Voice interface
+
 
 ## 👥 Contributors
 
