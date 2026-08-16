@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="banner.png" alt="ACCESS Banner" width="700"/>
-
 # ACCESS
 
 **Adaptive Cognitive Companion for Efficient System Services**
@@ -12,6 +10,9 @@
 ![Platform](https://img.shields.io/badge/Platform-macOS-000000?logo=apple&logoColor=white ) windows
 ![Version](https://img.shields.io/badge/Version-1.0-blue)
 ![Status](https://img.shields.io/badge/Status-In%20Development-yellow)
+
+<img src="banner.png" alt="ACCESS Banner" width="700"/>
+
 
 </div>
 
