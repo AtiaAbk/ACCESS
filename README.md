@@ -9,7 +9,7 @@
 *Intelligent Desktop Assistant*
 
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
-![Platform](https://img.shields.io/badge/Platform-macOS-000000?logo=apple&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-macOS-000000?logo=apple&logoColor=white ) windows
 ![Version](https://img.shields.io/badge/Version-1.0-blue)
 ![Status](https://img.shields.io/badge/Status-In%20Development-yellow)
 
