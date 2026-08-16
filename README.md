@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/banner.png" alt="ACCESS Banner" width="700"/>
+
 # ACCESS
 
 **Adaptive Cognitive Companion for Efficient System Services**
@@ -34,3 +36,63 @@ ACCESS is a modular, offline-first desktop assistant for macOS that interprets n
 - ✅ Confirmation prompts for destructive actions
 
 ## 🧠 Architecture
+
+```
+User
+  ↓
+Interface (Terminal UI)
+  ↓
+Engine
+  ↓
+Router
+  ↓
+Tools / System Control
+```
+
+*AI/Decision Layer is currently being integrated between the Engine and Router.*
+
+## 🛠️ Tech Stack
+
+Python • Rich (terminal UI) • Modular plugin system
+
+## 📦 Installation
+
+```bash
+git clone https://github.com/AtiaAbk/ACCESS.git
+cd ACCESS
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python main.py
+```
+
+## 💻 Usage
+
+```
+ACCESS > open calculator
+ACCESS: Opening Calculator.
+```
+
+## 🗺️ Roadmap
+
+- [ ] Integrate AI decision layer (Phase 5)
+- [ ] Add file operation & screenshot tools
+- [ ] Persistent memory system
+- [ ] Multi-step task planning
+- [ ] Voice interface
+
+## 👥 Contributors
+
+**Atia Oishi** ([@AtiaAbk](https://github.com/AtiaAbk)) — atia.abk@gmail.com
+
+## 📄 License
+
+*Add your project's license here.*
+
+---
+
+<div align="center">
+
+Built with 🖤 on macOS
+
+</div>
