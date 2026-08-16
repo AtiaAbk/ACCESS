@@ -2,13 +2,15 @@ from ai.models import TaskStep
 
 
 class TaskPlanner:
-    """Breaks compound/abstract requests into ordered TaskStep plans."""
+    """
+    Creates ordered execution plans for compound commands.
+    """
 
     WORKSPACE_PRESETS = {
         "development workspace": [
             TaskStep(
                 action="open_application",
-                target="VS Code",
+                target="Visual Studio Code",
             ),
             TaskStep(
                 action="open_application",
@@ -33,15 +35,17 @@ class TaskPlanner:
     }
 
     def plan(self, text: str):
-        """
-        Return a list of TaskStep if the request matches
-        a known compound workflow, otherwise an empty list.
-        """
-
-        cleaned = text.strip().lower()
+        cleaned = (text or "").strip().lower()
 
         for key, steps in self.WORKSPACE_PRESETS.items():
+
             if key in cleaned:
-                return list(steps)
+                return [
+                    TaskStep(
+                        action=step.action,
+                        target=step.target,
+                    )
+                    for step in steps
+                ]
 
         return []

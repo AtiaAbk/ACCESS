@@ -5,77 +5,121 @@ from ai.task_planner import TaskPlanner
 
 class AIDecisionEngine:
     """
-    ACCESS Phase 5 AI / Decision Layer.
+    ACCESS AI Decision Layer.
 
     Responsibilities:
-    - Interpret natural-language commands
-    - Detect goals
-    - Detect compound workflows
-    - Produce AIResult objects
-    - Produce ordered TaskStep objects
-    - Never execute system actions directly
+    - Natural-language goal detection
+    - Compound task planning
+    - LLM result integration
+    - Memory-aware interpretation
+    - Structured AIResult generation
+
+    This class NEVER executes system actions.
     """
 
-    CONFIDENCE_THRESHOLD = 0.6
+    CONFIDENCE_THRESHOLD = 0.60
 
-    def __init__(self):
+    def __init__(self, local_llm=None):
         self.goal_detector = GoalDetector()
         self.task_planner = TaskPlanner()
+        self.local_llm = local_llm
 
-    def interpret(self, text: str, recent_memory=None) -> AIResult:
-        """
-        Convert natural-language input into an AIResult.
-
-        Example:
-
-            please open calculator
-
-        becomes:
-
-            AIResult(
-                intent="open_application",
-                target="Calculator",
-                ...
-            )
-        """
+    def interpret(
+        self,
+        text: str,
+        recent_memory=None,
+    ) -> AIResult:
 
         cleaned = (text or "").strip()
 
         if not cleaned:
             return AIResult(
                 intent="unknown",
-                target=None,
                 confidence=0.0,
-                steps=[],
                 raw_input=cleaned,
             )
 
-        # -------------------------------------------------
-        # MULTI-STEP TASK
-        # -------------------------------------------------
+        # --------------------------------------------------
+        # 1. Known compound workflow
+        # --------------------------------------------------
 
         planned_steps = self.task_planner.plan(cleaned)
 
         if planned_steps:
             return AIResult(
                 intent="multi_step_plan",
-                target=None,
-                confidence=0.85,
-                steps=list(planned_steps),
+                confidence=0.95,
+                steps=planned_steps,
                 raw_input=cleaned,
             )
 
-        # -------------------------------------------------
-        # SINGLE-STEP GOAL DETECTION
-        # -------------------------------------------------
+        # --------------------------------------------------
+        # 2. Deterministic local detector
+        # --------------------------------------------------
 
         intent, target, confidence = (
             self.goal_detector.detect(cleaned)
         )
 
-        # -------------------------------------------------
-        # MEMORY-AWARE FALLBACK
-        # -------------------------------------------------
+        # --------------------------------------------------
+        # 3. Local LLM fallback
+        # --------------------------------------------------
+
+        llm_data = None
+
+        if (
+            intent == "unknown"
+            and self.local_llm is not None
+        ):
+            try:
+                if self.local_llm.is_available():
+                    llm_data = self.local_llm.interpret(
+                        cleaned
+                    )
+            except Exception:
+                llm_data = None
+
+        if isinstance(llm_data, dict):
+
+            llm_intent = llm_data.get(
+                "intent",
+                "unknown",
+            )
+
+            llm_target = llm_data.get(
+                "target"
+            )
+
+            llm_response = llm_data.get(
+                "response"
+            )
+
+            if llm_intent not in {
+                "",
+                None,
+                "unknown",
+            }:
+
+                intent = llm_intent
+                target = llm_target
+
+                confidence = max(
+                    confidence,
+                    0.80,
+                )
+
+                if llm_intent == "conversation":
+                    return AIResult(
+                        intent="conversation",
+                        target=llm_target,
+                        confidence=confidence,
+                        response=llm_response,
+                        raw_input=cleaned,
+                    )
+
+        # --------------------------------------------------
+        # 4. Memory-aware "again" behaviour
+        # --------------------------------------------------
 
         if (
             intent == "unknown"
@@ -84,10 +128,15 @@ class AIDecisionEngine:
         ):
             try:
                 previous_input = recent_memory[0][0]
-            except (IndexError, TypeError):
+            except (
+                IndexError,
+                TypeError,
+                KeyError,
+            ):
                 previous_input = None
 
             if previous_input:
+
                 (
                     previous_intent,
                     previous_target,
@@ -97,22 +146,25 @@ class AIDecisionEngine:
                 )
 
                 if previous_intent != "unknown":
+
                     intent = previous_intent
                     target = previous_target
 
-                    # Inferred commands receive lower confidence.
                     confidence = max(
-                        previous_confidence - 0.2,
+                        previous_confidence - 0.20,
                         0.0,
                     )
 
-        # -------------------------------------------------
-        # STRUCTURED RESULT
-        # -------------------------------------------------
+        # --------------------------------------------------
+        # 5. Structured task step
+        # --------------------------------------------------
 
         steps = []
 
-        if intent != "unknown":
+        if intent not in {
+            "unknown",
+            "conversation",
+        }:
             steps.append(
                 TaskStep(
                     action=intent,
@@ -130,13 +182,10 @@ class AIDecisionEngine:
 
     @staticmethod
     def _is_vague_reference(text: str) -> bool:
-        """Detect simple references to the previous task."""
 
-        phrases = {
+        return text.strip().lower() in {
             "do that again",
             "same as before",
             "repeat that",
             "again",
         }
-
-        return text.strip().lower() in phrases
