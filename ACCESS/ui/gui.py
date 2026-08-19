@@ -31,6 +31,7 @@ from app.system_monitor import (
     format_duration,
 )
 from ui.syntax_highlighter import HighlightedCode, highlight_code
+from ui.file_operations import FileOperationsWindow
 from voice import VoiceError, VoiceService
 
 
@@ -219,6 +220,7 @@ class AccessGUI:
         self._dashboard_generation = 0
         self._dashboard_refreshing = False
         self._dashboard_widgets: dict[str, dict[str, object]] = {}
+        self._file_operations: FileOperationsWindow | None = None
         available_fonts = set(tkfont.families(self.root))
         fluent_fonts = [
             name
@@ -523,6 +525,7 @@ class AccessGUI:
 
         self._nav_button("✦", "Assistant", lambda: self.command_entry.focus_set(), active=True)
         self._nav_button("▦", "Dashboard", self.show_system_dashboard)
+        self._nav_button("🗂", "File operations", self.show_file_operations)
         self._nav_button("↻", "New conversation", self.clear_conversation)
         self._nav_button("◷", "History", self.show_history)
         self._nav_button("?", "Commands", self.show_help)
@@ -639,6 +642,24 @@ class AccessGUI:
             cursor="hand2",
         )
         button.pack(fill="x", padx=20, pady=0)
+
+    def show_file_operations(self) -> None:
+        """Open or focus the dedicated file-management workspace."""
+
+        if self._file_operations and self._file_operations.window.winfo_exists():
+            self._file_operations.window.deiconify()
+            self._file_operations.window.lift()
+            self._file_operations.window.focus_force()
+            return
+        self._file_operations = FileOperationsWindow(
+            self.root,
+            self.colors,
+            initial_directory=Path.cwd(),
+            on_close=self._file_operations_closed,
+        )
+
+    def _file_operations_closed(self) -> None:
+        self._file_operations = None
 
     @staticmethod
     def _settings_file() -> Path:
@@ -1907,6 +1928,15 @@ class AccessGUI:
         if command_lower in {"history", "/history", "show history"}:
             self.show_history()
             return
+        if command_lower in {
+            "files",
+            "/files",
+            "file operations",
+            "open file operations",
+            "file manager",
+        }:
+            self.show_file_operations()
+            return
         if command_lower in {"settings", "/settings", "open settings"}:
             self.show_settings()
             return
@@ -2553,6 +2583,8 @@ class AccessGUI:
     def toggle_theme(self) -> None:
         if self._dashboard_window and self._dashboard_window.winfo_exists():
             self._close_system_dashboard()
+        if self._file_operations and self._file_operations.window.winfo_exists():
+            self._file_operations.close()
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
         settings = self._read_settings()
         settings["theme"] = self.theme_name

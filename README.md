@@ -91,7 +91,7 @@ ACCESS: Opening Calculator.
 
 ## 📄 License
 
-*Add your project's license here.*
+MIT LICENSE
 
 ---
 
