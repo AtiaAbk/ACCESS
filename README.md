@@ -87,7 +87,7 @@ ACCESS: Opening Calculator.
 
 ## 👥 Contributors
 
-**Atia Oishi** ([@AtiaAbk](https://github.com/AtiaAbk)) — atia.abk@gmail.com
+**Atia  Oishi** ([@AtiaAbk](https://github.com/AtiaAbk)) — atia.abk@gmail.com
 
 ## 📄 License
 
