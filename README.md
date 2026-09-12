@@ -95,8 +95,5 @@ MIT LICENSE
 
 ---
 
-<div align="center">
 
-Built with 🖤 on macOS
 
-</div>
