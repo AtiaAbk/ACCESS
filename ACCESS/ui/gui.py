@@ -46,6 +46,10 @@ WINDOW_MARGIN = (64, 48)
 
 QUICK_ACTION_CATALOG = {
     "screenshot": {"icon": "\ue722", "label": "Screenshot", "kind": "command", "value": "take a screenshot"},
+    "demo": {"icon": "\ue735", "label": "Live Demo", "kind": "command", "value": "demo"},
+    "smart_home": {"icon": "\ue80f", "label": "Smart Home", "kind": "command", "value": "smart home"},
+    "health": {"icon": "\ue95e", "label": "Sys Health", "kind": "command", "value": "system health"},
+    "workspace": {"icon": "\ue7be", "label": "Dev Setup", "kind": "command", "value": "prepare my development workspace"},
     "chrome": {"icon": "\ue774", "label": "Chrome", "kind": "command", "value": "open chrome"},
     "calculator": {"icon": "\ue8ef", "label": "Calculator", "kind": "command", "value": "open calculator"},
     "vscode": {"icon": "\ue943", "label": "VS Code", "kind": "command", "value": "open vscode"},
@@ -65,15 +69,16 @@ QUICK_ACTION_CATALOG = {
 }
 
 DEFAULT_QUICK_ACTIONS = [
-    "screenshot", "chrome", "calculator", "vscode", "explorer", "terminal",
-    "notepad", "task_manager", "history", "commands", "new_chat", "lock", "paint",
+    "demo", "smart_home", "health", "workspace", "screenshot", "calculator",
+    "vscode", "terminal", "status", "history", "commands", "new_chat", "lock",
 ]
 
 FALLBACK_ACTION_ICONS = {
-    "screenshot": "▣", "chrome": "◎", "calculator": "∑", "vscode": "</>",
-    "explorer": "▰", "terminal": ">_", "notepad": "✎", "task_manager": "≋",
-    "paint": "✦", "history": "↶", "commands": "?", "new_chat": "+",
-    "status": "◉", "about": "ⓘ", "sleep": "◐", "restart": "↻", "lock": "◆",
+    "screenshot": "▣", "demo": "★", "smart_home": "⌂", "health": "♥", "workspace": "⚙",
+    "chrome": "◎", "calculator": "∑", "vscode": "</>", "explorer": "▰",
+    "terminal": ">_", "notepad": "✎", "task_manager": "≋", "paint": "✦",
+    "history": "↶", "commands": "?", "new_chat": "+", "status": "◉",
+    "about": "ⓘ", "sleep": "◐", "restart": "↻", "lock": "◆",
 }
 
 

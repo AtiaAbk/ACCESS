@@ -159,6 +159,38 @@ class IntentRouter:
         "what are you": "about",
         "introduce yourself": "about",
         "tell me about yourself": "about",
+        "about": "about",
+        "help": "help",
+        "commands": "help",
+        "status": "status",
+        "system status": "system_status",
+        "system health": "system_status",
+        "health": "system_status",
+        "battery": "battery_status",
+        "battery status": "battery_status",
+        "cpu": "cpu_status",
+        "cpu usage": "cpu_status",
+        "memory": "memory_status",
+        "memory usage": "memory_status",
+        "ram": "memory_status",
+        "ram usage": "memory_status",
+        "clear": "clear",
+        "demo": "demo",
+        "live demo": "demo",
+        "start demo": "demo",
+        "reminders": "list_reminders",
+        "show reminders": "list_reminders",
+        "list reminders": "list_reminders",
+        "my reminders": "list_reminders",
+        "smart home": "smart_home",
+        "smart home status": "smart_home",
+        "home status": "smart_home",
+        "house status": "smart_home",
+        "security status": "security_status",
+        "disarm security": "disarm_security",
+        "emergency alarm": "emergency_alarm",
+        "trigger alarm": "emergency_alarm",
+        "test alarm": "emergency_alarm",
         "exit": "exit",
         "quit": "exit",
         "bye": "exit",
@@ -305,6 +337,42 @@ class IntentRouter:
                 f"{match.group(1).strip()}|{match.group(2).strip()}",
                 1.0,
             )
+
+        # Workspace presets
+        if re.search(r"\bprepare\s+(?:my\s+)?development\s+workspace\b", normalized, re.I):
+            return Intent("multi_step_plan", "development workspace", 1.0)
+        if re.search(r"\bprepare\s+(?:my\s+)?writing\s+workspace\b", normalized, re.I):
+            return Intent("multi_step_plan", "writing workspace", 1.0)
+        if re.search(r"\bprepare\s+(?:my\s+)?presentation(?:\s+workspace)?\b", normalized, re.I):
+            return Intent("multi_step_plan", "presentation workspace", 1.0)
+
+        # Reminders
+        if re.search(r"^remind\s+me\s+(?:in|at|tomorrow\s+at)\s+", normalized, re.I):
+            return Intent("set_reminder", command, 1.0)
+        cancel_reminder_match = re.search(r"^(?:cancel|delete)\s+reminder\s+([a-f0-9-]+)$", normalized, re.I)
+        if cancel_reminder_match:
+            return Intent("cancel_reminder", cancel_reminder_match.group(1), 1.0)
+
+        # Smart Home & Security
+        if re.search(r"\b(?:arm|set)\s+security\b", normalized, re.I):
+            return Intent("arm_security", command, 1.0)
+        if re.search(r"\b(?:disarm|deactivate)\s+security\b", normalized, re.I):
+            return Intent("disarm_security", command, 1.0)
+        if re.search(r"\b(?:lock|unlock)\s+(?:the\s+)?(?:front\s+)?door\b", normalized, re.I):
+            return Intent("smart_home", command, 1.0)
+        if re.search(r"\b(?:set|change|turn)?\s*(?:thermostat|ac|air conditioner|temp|temperature)\s*(?:to)?\s*\d{1,2}\b", normalized, re.I):
+            return Intent("smart_home", command, 1.0)
+        if re.search(r"\b(?:open|close)\s+(?:the\s+)?curtains?\b", normalized, re.I):
+            return Intent("smart_home", command, 1.0)
+        if re.search(r"\b(?:turn on|turn off|switch on|switch off)\s+(?:the\s+)?(?:living room|bedroom|kitchen|balcony|water pump|curtain|light|pump)\b", normalized, re.I):
+            return Intent("smart_home", command, 1.0)
+
+        # Direct Math
+        math_calc_match = re.search(r"^(?:calculate|solve|what is)\s+([0-9\s\+\-\*\/\(\)\.\%\^]+)$", normalized, re.I)
+        if math_calc_match:
+            expr = math_calc_match.group(1).strip()
+            if any(op in expr for op in "+-*/%^"):
+                return Intent("calculate", expr, 1.0)
 
         # For short system commands embedded in a prompt, require a command
         # phrase plus a command-like cue. This avoids hijacking statements

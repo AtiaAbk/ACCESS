@@ -8,6 +8,11 @@ import re
 import threading
 
 
+import platform
+import shutil
+import subprocess
+
+
 class VoiceError(RuntimeError):
     """Base class for recoverable voice errors."""
 
@@ -46,14 +51,22 @@ class VoiceService:
 
     @property
     def can_listen(self) -> bool:
-        return all(
-            importlib.util.find_spec(module) is not None
-            for module in ("speech_recognition", "pocketsphinx", "pyaudio")
+        return (
+            importlib.util.find_spec("speech_recognition") is not None
+            and importlib.util.find_spec("pyaudio") is not None
         )
 
     @property
     def can_speak(self) -> bool:
-        return importlib.util.find_spec("pyttsx3") is not None
+        if importlib.util.find_spec("pyttsx3") is not None:
+            return True
+        if platform.system() == "Darwin" and shutil.which("say"):
+            return True
+        if platform.system() == "Windows" and shutil.which("powershell"):
+            return True
+        if platform.system() == "Linux" and shutil.which("espeak"):
+            return True
+        return False
 
     def listen(self, timeout: float = 5, phrase_time_limit: float = 10) -> str:
         """Capture one phrase and transcribe it locally with PocketSphinx."""
@@ -82,18 +95,22 @@ class VoiceService:
                 "No working microphone was found. Check the device and microphone permission."
             ) from error
 
+        transcript = None
         try:
             transcript = recognizer.recognize_sphinx(audio, language=self.language)
-        except sr.UnknownValueError as error:
-            raise VoiceNotUnderstood(
-                "I heard audio but couldn't understand it. Please speak clearly and try again."
-            ) from error
-        except (LookupError, RuntimeError) as error:
-            raise VoiceUnavailable(
-                "The offline speech model could not start. Reinstall the voice dependencies."
-            ) from error
+        except Exception:
+            try:
+                transcript = recognizer.recognize_google(audio, language=self.language)
+            except sr.UnknownValueError as error:
+                raise VoiceNotUnderstood(
+                    "I heard audio but couldn't understand it. Please speak clearly and try again."
+                ) from error
+            except Exception as error:
+                raise VoiceUnavailable(
+                    f"Speech recognition failed: {error}"
+                ) from error
 
-        transcript = str(transcript).strip()
+        transcript = str(transcript).strip() if transcript else ""
         if not transcript:
             raise VoiceNotUnderstood("I couldn't understand that. Please try again.")
         return transcript
@@ -154,6 +171,17 @@ class VoiceService:
             engine.stop()
             return voices
         except Exception:
+            if platform.system() == "Darwin":
+                try:
+                    result = subprocess.run(["say", "-v", "?"], capture_output=True, text=True)
+                    voices = []
+                    for line in result.stdout.strip().splitlines():
+                        parts = line.split()
+                        if parts:
+                            voices.append((parts[0], parts[0]))
+                    return voices
+                except Exception:
+                    pass
             return []
 
     def stop(self) -> None:
@@ -179,31 +207,77 @@ class VoiceService:
             self._speech_thread.start()
 
     def _speech_worker(self) -> None:
+        engine = None
         try:
             import pyttsx3
 
             engine = pyttsx3.init()
         except Exception:
-            return
+            engine = None
 
         while True:
             text = self._speech_queue.get()
             if text is None:
+                if engine is not None:
+                    try:
+                        engine.stop()
+                    except Exception:
+                        pass
+                return
+
+            # Backend 1: pyttsx3
+            if engine is not None:
                 try:
-                    engine.stop()
+                    engine.setProperty("rate", self.rate)
+                    engine.setProperty("volume", self.volume)
+                    if self.voice_id:
+                        engine.setProperty("voice", self.voice_id)
+                    engine.say(text)
+                    engine.runAndWait()
+                    continue
                 except Exception:
                     pass
-                return
-            try:
-                engine.setProperty("rate", self.rate)
-                engine.setProperty("volume", self.volume)
-                if self.voice_id:
-                    engine.setProperty("voice", self.voice_id)
-                engine.say(text)
-                engine.runAndWait()
-            except Exception:
-                # Speech output is optional and must never take down the UI.
-                continue
+
+            # Backend 2: native macOS say command
+            if platform.system() == "Darwin":
+                try:
+                    cmd = ["say"]
+                    if self.rate:
+                        cmd.extend(["-r", str(self.rate)])
+                    if self.voice_id:
+                        cmd.extend(["-v", self.voice_id])
+                    cmd.append(text)
+                    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    continue
+                except Exception:
+                    pass
+
+            # Backend 3: Windows PowerShell speech
+            if platform.system() == "Windows":
+                try:
+                    escaped = text.replace('"', '`"').replace("'", "''")
+                    ps_cmd = (
+                        "Add-Type -AssemblyName System.Speech; "
+                        "$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                        f"$synth.Speak('{escaped}');"
+                    )
+                    subprocess.run(
+                        ["powershell", "-NoProfile", "-Command", ps_cmd],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    continue
+                except Exception:
+                    pass
+
+            # Backend 4: Linux espeak
+            if platform.system() == "Linux":
+                try:
+                    subprocess.run(["espeak", text], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    continue
+                except Exception:
+                    pass
 
     @staticmethod
     def _prepare_for_speech(text: str) -> str:
