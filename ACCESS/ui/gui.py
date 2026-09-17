@@ -1898,6 +1898,12 @@ class AccessGUI:
         self.root.bind("<F1>", lambda _event: self.show_help())
         self.root.bind("<Control-Shift-v>", lambda _event: self.start_voice_input())
         self.root.bind("<Escape>", lambda _event: self.command_entry.focus_set())
+        # macOS Command shortcuts
+        self.root.bind("<Command-l>", lambda _event: self.command_entry.focus_set())
+        self.root.bind("<Command-k>", lambda _event: self.command_entry.focus_set())
+        self.root.bind("<Command-n>", lambda _event: self.clear_conversation())
+        self.root.bind("<Command-Shift-v>", lambda _event: self.start_voice_input())
+        self.root.bind("<Command-Shift-V>", lambda _event: self.start_voice_input())
 
     def submit_from_entry(self) -> None:
         if self.listening:

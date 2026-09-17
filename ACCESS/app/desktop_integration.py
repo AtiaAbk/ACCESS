@@ -73,6 +73,10 @@ class DesktopIntegration:
             self.hotkey_listener = None
         if not enabled:
             return
+        # macOS HIToolbox assertion: pynput keyboard listener runs on a background thread
+        # which triggers a fatal SIGTRAP in dispatch_assert_queue on macOS 14+ / Darwin.
+        if platform.system() == "Darwin":
+            return
         try:
             from pynput import keyboard
 
