@@ -1,5 +1,11 @@
 import json
-import requests
+import urllib.error
+import urllib.request
+
+try:
+    import requests
+except ModuleNotFoundError:
+    requests = None
 
 
 class LocalLLM:
@@ -27,15 +33,24 @@ class LocalLLM:
         )
 
     def is_available(self):
+        if requests is not None:
+            try:
+                response = requests.get(
+                    f"{self.base_url}/api/tags",
+                    timeout=2,
+                )
+                return response.ok
+            except Exception:
+                return False
+
         try:
-            response = requests.get(
+            req = urllib.request.Request(
                 f"{self.base_url}/api/tags",
-                timeout=2,
+                headers={"User-Agent": "ACCESS/2.0"},
             )
-
-            return response.ok
-
-        except requests.RequestException:
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                return resp.status == 200
+        except Exception:
             return False
 
     def interpret(self, command):
@@ -116,16 +131,22 @@ User:
         }
 
         try:
-
-            response = requests.post(
-                self.generate_url,
-                json=payload,
-                timeout=15,
-            )
-
-            response.raise_for_status()
-
-            data = response.json()
+            if requests is not None:
+                response = requests.post(
+                    self.generate_url,
+                    json=payload,
+                    timeout=15,
+                )
+                response.raise_for_status()
+                data = response.json()
+            else:
+                req = urllib.request.Request(
+                    self.generate_url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "User-Agent": "ACCESS/2.0"},
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
 
             text = data.get(
                 "response",
@@ -134,7 +155,7 @@ User:
 
             return self._parse_json(text)
 
-        except requests.RequestException as exc:
+        except Exception as exc:
 
             return {
                 "intent": "unknown",
@@ -190,23 +211,29 @@ Assistant:
         }
 
         try:
-
-            response = requests.post(
-                self.generate_url,
-                json=payload,
-                timeout=20,
-            )
-
-            response.raise_for_status()
-
-            data = response.json()
+            if requests is not None:
+                response = requests.post(
+                    self.generate_url,
+                    json=payload,
+                    timeout=20,
+                )
+                response.raise_for_status()
+                data = response.json()
+            else:
+                req = urllib.request.Request(
+                    self.generate_url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "User-Agent": "ACCESS/2.0"},
+                )
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
 
             return data.get(
                 "response",
                 "",
             ).strip()
 
-        except requests.RequestException:
+        except Exception:
             return None
 
     @staticmethod
