@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
 import socket
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
 
-import psutil
+try:
+    import psutil
+except ModuleNotFoundError:
+    psutil = None
 
 
 @dataclass(frozen=True)
@@ -46,7 +51,12 @@ class SystemMonitor:
 
     def __init__(self):
         self._lock = threading.Lock()
-        counters = psutil.net_io_counters()
+        counters = None
+        if psutil is not None:
+            try:
+                counters = psutil.net_io_counters()
+            except Exception:
+                counters = None
         self._last_network = (
             counters.bytes_recv if counters else 0,
             counters.bytes_sent if counters else 0,
@@ -55,6 +65,51 @@ class SystemMonitor:
 
     def snapshot(self) -> SystemSnapshot:
         """Return one coherent sample; safe to call from a worker thread."""
+
+        if psutil is None:
+            total_ram = 0
+            try:
+                if platform.system() == "Darwin":
+                    out = subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True)
+                    total_ram = int(out.strip())
+                elif platform.system() == "Linux" and os.path.exists("/proc/meminfo"):
+                    with open("/proc/meminfo") as f:
+                        for line in f:
+                            if line.startswith("MemTotal:"):
+                                total_ram = int(line.split()[1]) * 1024
+                                break
+            except Exception:
+                pass
+            if total_ram <= 0:
+                total_ram = 8 * 1024 * 1024 * 1024  # Standard fallback
+
+            try:
+                total, used, free = shutil.disk_usage(self._disk_root())
+                disk_percent = round((used / total) * 100, 1) if total else 0.0
+            except Exception:
+                total, used, disk_percent = 0, 0, 0.0
+            return SystemSnapshot(
+                cpu_percent=0.0,
+                memory_percent=0.0,
+                memory_used=0,
+                memory_total=total_ram,
+                disk_percent=disk_percent,
+                disk_used=used,
+                disk_total=total,
+                battery_percent=None,
+                battery_plugged=None,
+                battery_seconds_left=None,
+                network_download_rate=0.0,
+                network_upload_rate=0.0,
+                network_received=0,
+                network_sent=0,
+                device_name=socket.gethostname() or "Unknown device",
+                os_version=f"{platform.system()} {platform.release()}",
+                uptime_seconds=0,
+                local_ip=self._local_ip(),
+                warnings=(),
+                sampled_at=time.time(),
+            )
 
         cpu_percent = float(psutil.cpu_percent(interval=0.15))
         memory = psutil.virtual_memory()

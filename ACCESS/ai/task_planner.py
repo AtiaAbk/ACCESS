@@ -32,6 +32,28 @@ class TaskPlanner:
                 target="Google Chrome",
             ),
         ],
+
+        "presentation workspace": [
+            TaskStep(
+                action="open_application",
+                target="Keynote",
+            ),
+            TaskStep(
+                action="open_application",
+                target="Google Chrome",
+            ),
+        ],
+
+        "research workspace": [
+            TaskStep(
+                action="open_application",
+                target="Google Chrome",
+            ),
+            TaskStep(
+                action="open_application",
+                target="Notes",
+            ),
+        ],
     }
 
     def plan(self, text: str):

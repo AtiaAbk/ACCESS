@@ -73,6 +73,10 @@ class DesktopIntegration:
             self.hotkey_listener = None
         if not enabled:
             return
+        # macOS HIToolbox assertion: pynput keyboard listener runs on a background thread
+        # which triggers a fatal SIGTRAP in dispatch_assert_queue on macOS 14+ / Darwin.
+        if platform.system() == "Darwin":
+            return
         try:
             from pynput import keyboard
 
@@ -101,7 +105,29 @@ class DesktopIntegration:
             )
             return True
         except Exception:
-            return False
+            pass
+
+        # Native macOS notification
+        if platform.system() == "Darwin":
+            try:
+                import subprocess
+
+                clean_title = title.replace('"', '\\"')
+                clean_msg = message.replace('"', '\\"')
+                subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        f'display notification "{clean_msg}" with title "{clean_title}"',
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+                return True
+            except Exception:
+                pass
+
+        return False
 
     @property
     def tray_available(self) -> bool:

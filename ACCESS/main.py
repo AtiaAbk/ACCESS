@@ -1,6 +1,43 @@
 import argparse
 import os
 import platform
+import sys
+
+
+def _auto_switch_virtualenv():
+    """Auto-detect and re-exec into project virtual environment if running outside it."""
+    if os.environ.get("ACCESS_VENV_SWITCHED"):
+        return
+
+    # Check if project dependencies are already present in current interpreter
+    try:
+        import rich  # noqa: F401
+        import requests  # noqa: F401
+        return
+    except ModuleNotFoundError:
+        pass
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(script_dir, ".venv", "bin", "python"),
+        os.path.join(script_dir, ".venv", "bin", "python3"),
+        os.path.join(script_dir, "..", ".venv", "bin", "python"),
+        os.path.join(script_dir, "..", ".venv", "bin", "python3"),
+        os.path.join(script_dir, ".venv", "Scripts", "python.exe"),
+        os.path.join(script_dir, "..", ".venv", "Scripts", "python.exe"),
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            env = dict(os.environ)
+            env["ACCESS_VENV_SWITCHED"] = "1"
+            try:
+                os.execve(candidate, [candidate] + sys.argv, env)
+            except OSError:
+                pass
+            break
+
+
+_auto_switch_virtualenv()
 
 try:
     from dotenv import load_dotenv

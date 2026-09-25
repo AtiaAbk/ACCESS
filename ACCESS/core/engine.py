@@ -1,15 +1,23 @@
+import ast
+import operator
 import os
 import platform
+import random
+import re
 import shutil
 import subprocess
 
 from pathlib import Path
 from datetime import datetime
 
+from ai.decision_engine import AIDecisionEngine
 from ai.local_llm import LocalLLM
 from core.router import IntentRouter
 from memory.database import MemoryDatabase
 from tools.system_tools import SystemControl
+from app.reminders import ReminderService
+from app.system_monitor import SystemMonitor, format_bytes, format_duration
+from plugins.smart_home import SmartHomeHub
 
 
 # ============================================================
@@ -23,14 +31,17 @@ class AccessEngine:
     Responsibilities:
     - Receive user commands
     - Deterministic command routing
-    - AI interpretation for unknown commands
-    - Local LLM fallback
-    - Execute single-step tasks
-    - Execute multi-step tasks
-    - Handle confirmation
-    - Handle screenshots
-    - Handle file operations
-    - Store interactions in local memory
+    - AI interpretation & goal detection
+    - Compound multi-step task planning
+    - Local LLM & cloud AI fallback
+    - Zero-dependency offline conversational heuristics
+    - Real-time system monitoring & health stats
+    - Scheduling & persistent reminders
+    - IoT Smart Home & security automation
+    - Execute single-step & multi-step tasks
+    - Handle confirmation for destructive actions
+    - Handle screenshots & file operations
+    - Store interactions in local SQLite memory
     """
 
     # ========================================================
@@ -51,8 +62,23 @@ class AccessEngine:
 
         self.memory = MemoryDatabase()
 
+        self.ai = AIDecisionEngine(local_llm=self.local_llm)
+
         # Compatibility alias
         self.system_tools = self.system
+
+        # ----------------------------------------------------
+        # APPLICATION & PLUGIN INTEGRATIONS
+        # ----------------------------------------------------
+
+        data_dir = Path(__file__).resolve().parent.parent / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        self.reminders = ReminderService(data_dir / "reminders.json")
+
+        self.monitor = SystemMonitor()
+
+        self.smart_home = SmartHomeHub(data_dir / "smart_home.json")
 
         # ----------------------------------------------------
         # ENGINE STATE
@@ -78,16 +104,17 @@ class AccessEngine:
 
     def process(self, user_input: str) -> str:
         """
-        Main ACCESS pipeline.
+        Main ACCESS processing pipeline.
 
-        IMPORTANT:
-        1. Explicit desktop commands are handled deterministically.
-        2. If one or more commands are present, they are executed.
-        3. If there is no command, the message goes directly to the local
-           Ollama model as normal conversation.
-        4. The AI decision engine is intentionally NOT used as a gate for
-           ordinary conversation. A small command model should never decide
-           whether a normal sentence is "allowed" to be conversation.
+        Processing Priority:
+        1. Pending confirmation check
+        2. Fast date / time / day queries (deterministic, zero latency)
+        3. Deterministic command routing (explicit desktop & system tasks)
+        4. AI Decision Engine (Goal Detector, Compound Plans, Memory Fallback)
+        5. Smart Home & Security device commands
+        6. Reminders & Scheduling
+        7. Safe math evaluation
+        8. Natural Conversation (Local LLM -> Cloud Gemini -> Offline Heuristics)
         """
 
         command = (user_input or "").strip()
@@ -96,7 +123,7 @@ class AccessEngine:
             return "Please enter a message."
 
         # ----------------------------------------------------
-        # PENDING CONFIRMATION
+        # 1. PENDING CONFIRMATION
         # ----------------------------------------------------
 
         if self.pending_action is not None:
@@ -105,7 +132,16 @@ class AccessEngine:
             return response
 
         # ----------------------------------------------------
-        # DETERMINISTIC COMMAND ROUTING
+        # 2. DATE / TIME / DAY (Fast, zero dependencies)
+        # ----------------------------------------------------
+
+        datetime_response = self._handle_datetime_query(command)
+        if datetime_response is not None:
+            self._save_memory(command, datetime_response)
+            return datetime_response
+
+        # ----------------------------------------------------
+        # 3. DETERMINISTIC COMMAND ROUTING
         # ----------------------------------------------------
 
         intents = self.router.route_all(command)
@@ -125,7 +161,6 @@ class AccessEngine:
                 )
                 results.append(result)
 
-                # A dangerous action pauses execution for confirmation.
                 if self.pending_action is not None:
                     break
 
@@ -133,12 +168,75 @@ class AccessEngine:
                     break
 
             response = "\n".join(results)
-
             self._save_memory(command, response)
             return response
 
         # ----------------------------------------------------
-        # NORMAL CONVERSATION
+        # 4. AI DECISION ENGINE (Goal Detection, Plans, Memory)
+        # ----------------------------------------------------
+
+        recent_memory = self.get_recent_memory(8)
+        try:
+            ai_result = self.ai.interpret(
+                command,
+                recent_memory=recent_memory,
+            )
+        except Exception:
+            ai_result = None
+
+        if ai_result is not None:
+            # Compound Multi-Step Plan
+            if (
+                ai_result.intent == "multi_step_plan"
+                and ai_result.steps
+                and ai_result.confidence >= self.ai.CONFIDENCE_THRESHOLD
+            ):
+                response = self._execute_plan(ai_result.steps)
+                self._save_memory(command, response)
+                return response
+
+            # Single executable intent identified by AI goal detector
+            if (
+                ai_result.intent
+                and ai_result.intent not in {"unknown", "conversation"}
+                and ai_result.confidence >= self.ai.CONFIDENCE_THRESHOLD
+            ):
+                response = self._execute_intent(
+                    ai_result.intent,
+                    ai_result.target or "",
+                )
+                self._save_memory(command, response)
+                return response
+
+        # ----------------------------------------------------
+        # 5. SMART HOME & SECURITY
+        # ----------------------------------------------------
+
+        smart_home_resp = self.smart_home.handle_command(command)
+        if smart_home_resp:
+            self._save_memory(command, smart_home_resp)
+            return smart_home_resp
+
+        # ----------------------------------------------------
+        # 6. REMINDERS & SCHEDULING
+        # ----------------------------------------------------
+
+        reminder_resp = self.reminders.interpret(command)
+        if reminder_resp:
+            self._save_memory(command, reminder_resp)
+            return reminder_resp
+
+        # ----------------------------------------------------
+        # 7. SAFE MATH CALCULATION
+        # ----------------------------------------------------
+
+        math_resp = self._handle_math(command)
+        if math_resp is not None:
+            self._save_memory(command, math_resp)
+            return math_resp
+
+        # ----------------------------------------------------
+        # 8. CONVERSATION (Ollama -> Cloud -> Offline Fallback)
         # ----------------------------------------------------
 
         response = self._chat_with_llm(command)
@@ -146,102 +244,72 @@ class AccessEngine:
         return response
 
     # ========================================================
-    # NORMAL CHAT
+    # CONVERSATIONAL AGENT (MULTI-TIERED)
     # ========================================================
 
     def _chat_with_llm(self, user_input: str) -> str:
         """
-        Send a non-command message to the local Ollama model.
-
-        Supports common LocalLLM interfaces:
-        - chat(...)
-        - generate(...)
-        - ask(...)
-        - interpret(...) returning {"response": ...}
-
-        The first three are preferred because they are true chat/generation
-        interfaces and do not force the model into an intent-classification
-        task.
+        Intelligent multi-tier conversation engine:
+        Tier 1: Local Ollama (if active)
+        Tier 2: Cloud Gemini API (if GEMINI_API_KEY is configured)
+        Tier 3: Offline Conversational Heuristics (100% offline fallback)
         """
 
-        try:
-            recent = self.get_recent_memory(8)
+        # Tier 1: Local Ollama
+        if self.local_llm.is_available():
+            try:
+                recent = self.get_recent_memory(8)
 
-            # Preferred: a real chat method.
-            chat_method = getattr(self.local_llm, "chat", None)
-            if callable(chat_method):
-                try:
-                    return self._normalize_llm_response(
-                        chat_method(
-                            user_input,
-                            recent_memory=recent,
-                        )
-                    )
-                except TypeError:
-                    return self._normalize_llm_response(
-                        chat_method(user_input)
-                    )
+                chat_method = getattr(self.local_llm, "chat", None)
+                if callable(chat_method):
+                    try:
+                        raw = chat_method(user_input, recent_memory=recent)
+                    except TypeError:
+                        raw = chat_method(user_input)
+                    normalized = self._normalize_llm_response(raw)
+                    if normalized and not normalized.startswith("I didn't get a response"):
+                        return normalized
 
-            # Alternative common interface.
-            generate_method = getattr(self.local_llm, "generate", None)
-            if callable(generate_method):
-                try:
-                    return self._normalize_llm_response(
-                        generate_method(
-                            user_input,
-                            recent_memory=recent,
-                        )
-                    )
-                except TypeError:
-                    return self._normalize_llm_response(
-                        generate_method(user_input)
-                    )
+                interpret_method = getattr(self.local_llm, "interpret", None)
+                if callable(interpret_method):
+                    result = interpret_method(user_input)
+                    if isinstance(result, dict) and result.get("response"):
+                        return str(result["response"]).strip()
+            except Exception:
+                pass
 
-            ask_method = getattr(self.local_llm, "ask", None)
-            if callable(ask_method):
-                try:
-                    return self._normalize_llm_response(
-                        ask_method(
-                            user_input,
-                            recent_memory=recent,
-                        )
-                    )
-                except TypeError:
-                    return self._normalize_llm_response(
-                        ask_method(user_input)
-                    )
+        # Tier 2: Cloud Gemini API (if key is set)
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if gemini_key:
+            try:
+                import requests
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"gemini-1.5-flash:generateContent?key={gemini_key}"
+                )
+                payload = {
+                    "contents": [{
+                        "parts": [{
+                            "text": (
+                                "You are ACCESS, a smart desktop assistant. "
+                                f"Answer helpfully and concisely: {user_input}"
+                            )
+                        }]
+                    }]
+                }
+                res = requests.post(url, json=payload, timeout=8)
+                if res.status_code == 200:
+                    data = res.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            return parts[0].get("text", "").strip()
+            except Exception:
+                pass
 
-            # Backward compatibility with the LocalLLM implementation that
-            # exposes only interpret(). If it returns a conversation response,
-            # use that response; NEVER execute an AI-generated system intent
-            # here. System commands are already handled by the deterministic
-            # router above.
-            interpret_method = getattr(self.local_llm, "interpret", None)
-            if callable(interpret_method):
-                result = interpret_method(user_input)
-
-                if isinstance(result, dict):
-                    response = (
-                        result.get("response")
-                        or result.get("text")
-                        or result.get("content")
-                        or ""
-                    )
-                    if response:
-                        return str(response).strip()
-
-                return self._normalize_llm_response(result)
-
-            return (
-                "I couldn't connect to the local language model. "
-                "Please check that Ollama is running."
-            )
-
-        except Exception as error:
-            return (
-                "I couldn't generate a response from the local model. "
-                f"Please check Ollama. ({error})"
-            )
+        # Tier 3: Zero-dependency Offline Conversational Engine
+        return self._offline_conversational_fallback(user_input)
 
     @staticmethod
     def _normalize_llm_response(result) -> str:
@@ -462,6 +530,91 @@ class AccessEngine:
                 "rename",
                 target,
             )
+
+        # ====================================================
+        # STATUS, HELP, DEMO
+        # ====================================================
+
+        if intent_name == "status":
+            return self._get_access_status()
+
+        if intent_name in {"help", "commands"}:
+            return self._get_help_text()
+
+        if intent_name == "demo":
+            return self._run_demo()
+
+        # ====================================================
+        # SYSTEM HEALTH & MONITORING
+        # ====================================================
+
+        if intent_name == "system_status":
+            return self._get_system_health_report()
+
+        if intent_name == "battery_status":
+            return self._get_battery_status()
+
+        if intent_name == "cpu_status":
+            return self._get_cpu_status()
+
+        if intent_name == "memory_status":
+            return self._get_memory_status()
+
+        # ====================================================
+        # MULTI-STEP WORKSPACE PLANS
+        # ====================================================
+
+        if intent_name == "multi_step_plan":
+            steps = self.ai.task_planner.plan(target)
+            if steps:
+                return self._execute_plan(steps)
+            return f"No execution steps defined for workspace '{target}'."
+
+        # ====================================================
+        # SCHEDULING & REMINDERS
+        # ====================================================
+
+        if intent_name == "set_reminder":
+            return self.reminders.interpret(target) or f"Reminder set: {target}"
+
+        if intent_name == "list_reminders":
+            return self.reminders.describe()
+
+        if intent_name == "cancel_reminder":
+            if self.reminders.cancel(target):
+                return f"Reminder {target} was cancelled."
+            return f"Could not find reminder with ID '{target}'."
+
+        # ====================================================
+        # SMART HOME & SECURITY
+        # ====================================================
+
+        if intent_name in {"smart_home", "smart_home_status"}:
+            resp = self.smart_home.handle_command(target) if target else None
+            return resp or self.smart_home.get_summary()
+
+        if intent_name == "security_status":
+            return self.smart_home.get_security_summary()
+
+        if intent_name == "arm_security":
+            return self.smart_home.handle_command(f"arm security {target}") or "Security armed."
+
+        if intent_name == "disarm_security":
+            return self.smart_home.handle_command("disarm security") or "Security disarmed."
+
+        if intent_name == "emergency_alarm":
+            return self.smart_home.handle_command("trigger alarm") or "Alarm triggered!"
+
+        # ====================================================
+        # MATH & UTILITY
+        # ====================================================
+
+        if intent_name == "calculate":
+            math_res = self._handle_math(target)
+            return math_res or f"Could not calculate: {target}"
+
+        if intent_name == "clear":
+            return "\n" * 30 + "Terminal screen cleared."
 
         # ----------------------------------------------------
         # UNKNOWN INTENT
@@ -1294,3 +1447,291 @@ class AccessEngine:
         except Exception:
 
             return []
+
+    # ========================================================
+    # DATE / TIME / DAY HANDLER
+    # ========================================================
+
+    def _handle_datetime_query(self, command: str) -> str | None:
+        """Handle basic date, time and day queries deterministically with zero latency."""
+        text = command.strip().lower()
+        normalized = (
+            text.replace("today's", "todays")
+            .replace("what's", "what is")
+            .replace("whats", "what is")
+        )
+
+        time_phrases = (
+            "what time is it", "what is the time", "what is current time",
+            "what is the current time", "tell me the time", "tell me current time",
+            "tell me the current time", "current time", "time now", "what time",
+        )
+        date_phrases = (
+            "what is today's date", "what is todays date", "what is the date",
+            "tell me today's date", "tell me todays date", "tell me the date",
+            "current date", "today's date", "todays date", "what date is it",
+        )
+        day_phrases = (
+            "what day is today", "what day is it", "tell me what day it is",
+            "tell me the day", "which day is today", "what is the day today",
+        )
+
+        now = datetime.now()
+        if any(phrase in normalized for phrase in time_phrases):
+            return f"It's {now.strftime('%I:%M:%S %p')}."
+        if any(phrase in normalized for phrase in date_phrases):
+            return f"Today is {now.strftime('%B %d, %Y')}."
+        if any(phrase in normalized for phrase in day_phrases):
+            return f"Today is {now.strftime('%A')}."
+        return None
+
+    # ========================================================
+    # SAFE ARITHMETIC / MATH EVALUATOR
+    # ========================================================
+
+    @staticmethod
+    def _handle_math(text: str) -> str | None:
+        """Safely calculate basic arithmetic expressions without eval."""
+        cleaned = text.strip().lower()
+        for prefix in ("calculate", "solve", "what is", "math"):
+            if cleaned.startswith(prefix):
+                cleaned = cleaned[len(prefix):].strip()
+                break
+        cleaned = cleaned.rstrip("?!., ")
+        if not cleaned:
+            return None
+
+        # Operator translation
+        cleaned = cleaned.replace("times", "*").replace("multiplied by", "*")
+        cleaned = cleaned.replace("divided by", "/").replace("over", "/")
+        cleaned = cleaned.replace("plus", "+").replace("minus", "-")
+        cleaned = cleaned.replace("^", "**")
+
+        allowed_chars = set("0123456789+-*/().% ")
+        if not all(c in allowed_chars for c in cleaned):
+            return None
+
+        if not any(op in cleaned for op in "+-*/%"):
+            return None
+
+        try:
+            tree = ast.parse(cleaned, mode="eval")
+            operators = {
+                ast.Add: operator.add,
+                ast.Sub: operator.sub,
+                ast.Mult: operator.mul,
+                ast.Div: operator.truediv,
+                ast.FloorDiv: operator.floordiv,
+                ast.Mod: operator.mod,
+                ast.Pow: operator.pow,
+                ast.USub: operator.neg,
+                ast.UAdd: operator.pos,
+            }
+
+            def _eval_node(node):
+                if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                    return node.value
+                if isinstance(node, ast.BinOp) and type(node.op) in operators:
+                    left = _eval_node(node.left)
+                    right = _eval_node(node.right)
+                    return operators[type(node.op)](left, right)
+                if isinstance(node, ast.UnaryOp) and type(node.op) in operators:
+                    operand = _eval_node(node.operand)
+                    return operators[type(node.op)](operand)
+                raise ValueError("Unsupported node")
+
+            result = _eval_node(tree.body)
+            if isinstance(result, float) and result.is_integer():
+                result = int(result)
+            formatted = f"{result:,}" if isinstance(result, int) else f"{result:.4f}".rstrip("0").rstrip(".")
+            return f"{cleaned.replace('**', '^')} = {formatted}"
+        except Exception:
+            return None
+
+    # ========================================================
+    # STATUS & SYSTEM MONITORING REPORTS
+    # ========================================================
+
+    def _get_access_status(self) -> str:
+        """Format ACCESS core engine status."""
+        llm_status = "[green]● ONLINE (Ollama)[/green]" if self.local_llm.is_available() else "[yellow]● STANDBY (Offline Fallback Ready)[/yellow]"
+        sec_status = f"[green]● {self.smart_home.security_mode.upper()}[/green]" if self.smart_home.security_mode != "Disarmed" else "[yellow]● DISARMED[/yellow]"
+        return (
+            "╭──────────────── ACCESS STATUS ────────────────╮\n"
+            "│ SYSTEM:        [green]● ONLINE[/green]                       │\n"
+            "│ ENGINE:        [green]● READY[/green]                        │\n"
+            "│ ROUTER:        [green]● READY[/green]                        │\n"
+            "│ AI LAYER:      [green]● ACTIVE[/green] (Goal Detector + Plans) │\n"
+            "│ MODE:          [yellow]OFFLINE-FIRST[/yellow]                 │\n"
+            f"│ PLATFORM:      {platform.system()} ({platform.machine()})\n"
+            f"│ LOCAL LLM:     {llm_status}\n"
+            f"│ SMART HOME:    {sec_status}\n"
+            "│ VERSION:       1.0 (Tech Fair Release)         │\n"
+            "╰───────────────────────────────────────────────╯"
+        )
+
+    def _get_system_health_report(self) -> str:
+        """Format real-time CPU, RAM, Disk, Battery, and Network metrics."""
+        snap = self.monitor.snapshot()
+        battery_str = "N/A"
+        if snap.battery_percent is not None:
+            plugged = " (Plugged In)" if snap.battery_plugged else " (On Battery)"
+            battery_str = f"{snap.battery_percent:.0f}%{plugged}"
+        return (
+            "🖥️ [bold cyan]System Health & Performance Monitor[/bold cyan]\n"
+            "──────────────────────────────────────────────\n"
+            f"• Device:    {snap.device_name} ({snap.os_version})\n"
+            f"• CPU Load:  {snap.cpu_percent:.1f}%\n"
+            f"• Memory:    {snap.memory_percent:.1f}% ({format_bytes(snap.memory_used)} used / {format_bytes(snap.memory_total)} total)\n"
+            f"• Disk:      {snap.disk_percent:.1f}% ({format_bytes(snap.disk_used)} used / {format_bytes(snap.disk_total)} total)\n"
+            f"• Battery:   {battery_str}\n"
+            f"• Network:   ↓ {format_bytes(snap.network_download_rate)}/s | ↑ {format_bytes(snap.network_upload_rate)}/s\n"
+            f"• Uptime:    {format_duration(snap.uptime_seconds)}"
+        )
+
+    def _get_battery_status(self) -> str:
+        snap = self.monitor.snapshot()
+        if snap.battery_percent is None:
+            return "Battery information is not available on this device (Desktop power source)."
+        state = "Charging / Plugged in" if snap.battery_plugged else "Discharging"
+        return f"🔋 Battery Level: {snap.battery_percent:.0f}% ({state})"
+
+    def _get_cpu_status(self) -> str:
+        snap = self.monitor.snapshot()
+        return f"⚡ CPU Utilization: {snap.cpu_percent:.1f}% across all cores."
+
+    def _get_memory_status(self) -> str:
+        snap = self.monitor.snapshot()
+        return f"🧠 RAM Utilization: {snap.memory_percent:.1f}% ({format_bytes(snap.memory_used)} used of {format_bytes(snap.memory_total)} total)."
+
+    def _get_help_text(self) -> str:
+        """Return the comprehensive ACCESS command reference."""
+        return (
+            "📋 [bold cyan]ACCESS Command Reference[/bold cyan]\n"
+            "────────────────────────────────────────────────────────\n"
+            "[bold white]General Commands:[/bold white]\n"
+            "  • help / commands            - Show this command reference\n"
+            "  • status                     - Show ACCESS engine status\n"
+            "  • system health / battery    - Real-time CPU, RAM, Battery & Network\n"
+            "  • demo                       - Run Tech Fair interactive live showcase\n"
+            "  • about                      - Project details & architecture\n"
+            "  • clear                      - Clear the screen\n"
+            "  • exit                       - Exit ACCESS\n\n"
+            "[bold white]Application & System Control:[/bold white]\n"
+            "  • open / close <app>         - e.g. 'open chrome', 'open calculator'\n"
+            "  • screenshot                 - Capture full screen\n"
+            "  • volume up / down / mute    - Control audio levels\n"
+            "  • brightness up / down       - Adjust display brightness\n"
+            "  • dark mode / light mode     - Toggle system appearance\n"
+            "  • lock screen                - Lock the computer\n"
+            "  • shutdown / restart / sleep - Power control (with safety confirmation)\n\n"
+            "[bold white]Multi-Step Workspaces:[/bold white]\n"
+            "  • prepare development workspace - Launch VS Code + Terminal + Chrome\n"
+            "  • prepare writing workspace     - Launch Notes + Chrome\n"
+            "  • prepare presentation          - Launch Keynote + Chrome\n\n"
+            "[bold white]File Management:[/bold white]\n"
+            "  • create file <name>         - Create a file\n"
+            "  • read file <path>           - Read file contents\n"
+            "  • search file <name>         - Locate files\n"
+            "  • copy / move / rename file  - File manipulation\n"
+            "  • delete file <path>         - Remove a file\n\n"
+            "[bold white]Scheduling & Reminders:[/bold white]\n"
+            "  • remind me in <N> minutes to <task>\n"
+            "  • remind me at <time> to <task>\n"
+            "  • show reminders / cancel reminder <id>\n\n"
+            "[bold white]Smart Home & Security Hub:[/bold white]\n"
+            "  • smart home / home status   - IoT devices overview\n"
+            "  • turn on/off living room light\n"
+            "  • set thermostat to 22 degrees\n"
+            "  • arm security / disarm security\n"
+            "  • lock / unlock front door\n"
+            "  • trigger emergency alarm\n\n"
+            "[bold white]Natural Conversation & Math:[/bold white]\n"
+            "  • 'what time is it', 'what is today's date'\n"
+            "  • 'calculate 25 * 40', 'solve 1024 / 8'\n"
+            "  • Ask questions or chat naturally!"
+        )
+
+    def _run_demo(self) -> str:
+        """Run an impressive showcase walkthrough for the tech fair."""
+        return (
+            "🌟 [bold cyan]ACCESS Live Demonstration Showcase[/bold cyan]\n"
+            "──────────────────────────────────────────────────────\n"
+            "Welcome to ACCESS — Adaptive Cognitive Companion for Efficient System Services!\n\n"
+            "Key Architectural Pillars:\n"
+            "1. 🔒 [bold green]100% Privacy & Local-First[/bold green]: All core routines, routers, and tools run on-device.\n"
+            "2. ⚡ [bold cyan]Deterministic & Hybrid AI Engine[/bold cyan]: Zero-latency command execution with multi-step reasoning.\n"
+            "3. 🖥️ [bold white]Desktop Automation[/bold white]: Native control of apps, volume, brightness, dark mode, files, and screenshots.\n"
+            "4. 🏠 [bold magenta]IoT Smart Home Hub[/bold magenta]: Room-based automation, sensor monitoring, and security alarm dispatch.\n\n"
+            "Try these commands in your live demo:\n"
+            "• 'prepare my development workspace'  → Compound task execution\n"
+            "• 'system health'                    → Real-time CPU, RAM, Battery & Network\n"
+            "• 'turn on living room light'        → Smart Home IoT control\n"
+            "• 'arm security away'                → Intelligent security system arming\n"
+            "• 'take a screenshot'                → Screen capture with thumbnail preview\n"
+            "• 'remind me in 5 minutes to submit' → Persistent scheduling\n"
+            "• 'turn on dark mode'                → System appearance toggle"
+        )
+
+    def _offline_conversational_fallback(self, user_input: str) -> str:
+        """Zero-dependency offline conversational heuristics."""
+        cleaned = user_input.strip().lower()
+
+        # Greetings
+        if cleaned in {
+            "hi", "hello", "hey", "hola", "greetings",
+            "good morning", "good afternoon", "good evening",
+            "hi access", "hello access", "hey access",
+        }:
+            greetings = [
+                "Hello! I am ACCESS, your intelligent desktop companion. How can I assist you today?",
+                "Greetings! ACCESS is online and ready for your commands.",
+                "Hi there! System status is optimal. What would you like to do?",
+            ]
+            return random.choice(greetings)
+
+        # Identity & Creator
+        if any(p in cleaned for p in ["who are you", "what are you", "introduce yourself"]):
+            return (
+                "I am ACCESS — Adaptive Cognitive Companion for Efficient System Services.\n"
+                "I'm an offline-first desktop assistant designed for complete local automation, "
+                "privacy, intelligent task execution, and system control."
+            )
+
+        if any(p in cleaned for p in ["who made you", "who created you", "who developed you", "who built you"]):
+            return (
+                "I was developed by Atia Oishi as a cross-platform desktop AI assistant and "
+                "smart home operating companion for the tech fair!"
+            )
+
+        # How are you
+        if any(p in cleaned for p in ["how are you", "how are you doing", "how are you today"]):
+            return "Operating at 100% capacity! All modules, security policies, and automation engines are green."
+
+        # Jokes
+        if any(p in cleaned for p in ["tell me a joke", "joke", "make me laugh"]):
+            jokes = [
+                "Why do programmers prefer dark mode? Because light attracts bugs!",
+                "There are 10 types of people in the world: those who understand binary, and those who don't.",
+                "Why was the computer cold? It left its Windows open!",
+                "A SQL query walks into a bar, walks up to two tables and asks: 'Can I join you?'",
+            ]
+            return random.choice(jokes)
+
+        # Gratitude
+        if any(p in cleaned for p in ["thank you", "thanks", "appreciate it"]):
+            return "You're very welcome! Always here to make your system run smoother."
+
+        # General helpful guidance
+        return (
+            f"I heard: '{user_input}'\n"
+            "I am currently operating in local-first mode. Here are some things you can try:\n"
+            "• 'help' — View all available commands\n"
+            "• 'status' — View ACCESS core engine status\n"
+            "• 'system health' — Inspect CPU, RAM, Disk, and Battery\n"
+            "• 'demo' — Run the live Tech Fair presentation showcase\n"
+            "• 'smart home' — Check virtual IoT devices and security\n"
+            "• 'prepare my development workspace' — Launch developer tools\n"
+            "• 'take a screenshot' — Capture the screen\n"
+            "• 'what time is it' or 'calculate 25 * 4' — Ask for time, date, or math"
+        )
